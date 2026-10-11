@@ -14,6 +14,11 @@ planning or important review. Claude keeps its own tools and routes. Provider
 models and role defaults live in `config/`; application profiles inherit shared
 provider settings from `config/headless.json`.
 
+The shared runners under `skills/` are platform-agnostic: any agent host can
+drive them directly, including Muse (Meta's personal AI assistant). Use
+`--platform headless` with the shared scripts when no platform entrypoint
+applies; platform folders are symlinks into the shared implementation.
+
 ## Layout
 
 ```text
