@@ -1,0 +1,11 @@
+{
+  "extends": "headless.json",
+  "mode": "raw",
+  "native_roles": {
+    "coordinator": "current",
+    "planner": "gpt-6-astra",
+    "reviewer": "gpt-6-astra",
+    "implementer": "gpt-6.1-sol",
+    "explorer": "gpt-6-luna"
+  }
+}

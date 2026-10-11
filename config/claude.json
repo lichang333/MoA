@@ -1,0 +1,7 @@
+{
+  "extends": "headless.json",
+  "mode": "raw",
+  "native_roles": {
+    "coordinator": "current"
+  }
+}

@@ -1,47 +1,115 @@
-# MoA — Mixture of Agents skills for Claude Code
+# MoA — shared workers for Codex and Claude Code
 
-Two Claude Code skills that put other models to work while Claude stays in charge of quality.
+Separate platform instructions, one shared implementation. The current session
+coordinates tasks, external models contribute answers or isolated code changes,
+and the coordinator reviews and integrates the result.
 
-| Skill | What it does | Models |
+| Workflow | Purpose | Execution |
 |---|---|---|
-| [`/moa`](skills/moa/SKILL.md) | Q&A / analysis: several models answer, Claude adds its own web-grounded answer and synthesizes the result | GLM, DeepSeek, MiniMax, Gemini, GPT/Claude APIs (keys in `skills/moa/.env`) |
-| [`/auto`](skills/auto/SKILL.md) | Coding: Claude triages a task (L0–L3), delegates implementation to Gemini through the Antigravity CLI (`agy`) in a sandbox, then reviews, verifies and commits | Gemini 3.x (and Claude via Antigravity) on the Antigravity quota |
+| `/moa` | Multi-model Q&A and analysis | Native analysis or external API answers; current-session synthesis |
+| `/auto` | Delegated coding | agy workers in isolated repos; sandboxed verification and reviewed-patch apply |
 
-## Install
+Codex uses the current session for dispatch and integration, with Astra for complex
+planning or important review. Claude keeps its own tools and routes. Provider
+models and role defaults live in `config/`; application profiles inherit shared
+provider settings from `config/headless.json`.
 
-```bash
-./install.sh
+## Layout
+
+```text
+AGENTS.md / CLAUDE.md           platform-specific project entrypoints
+platforms/codex/skills/         Codex moa and auto skill entrypoints
+platforms/claude/skills/        Claude moa and auto skill entrypoints
+shared/                        common project and workflow rules
+config/                        provider defaults and platform routing profiles
+skills/moa/                    shared API runner and offline tests
+skills/auto/                   shared agy executor, guard, sandbox and tests
+tests/                         installer tests
 ```
 
-It symlinks `skills/moa` → `~/.agents/skills/moa` (and `~/.claude/skills/moa` → that) and
-`skills/auto` → `~/.claude/skills/auto`, creates `skills/moa/.env` from `.env.example` if missing,
-and merges the `/auto` guard into `~/.gemini/config/hooks.json`. Anything in the way is moved to
-`~/.local/share/moa-install-backups/<timestamp>/`, never deleted.
+Platform folders link to shared scripts, workflow documents and profiles. Edit the
+source in `skills/`, `shared/` or `config/`; there are no copied implementations.
+API keys remain in the existing local `skills/moa/.env`, with no per-platform copy.
 
-## /auto security model (summary)
-
-Gemini has broken this machine before, so `/auto` assumes the worker is careless or hostile:
-
-1. **Standalone throwaway repo** per task (base commit only: no stash, branches, remotes, credentials).
-2. **`agy_guard.py`** — agy PreToolUse hook; inert unless `AUTO_WORKER=1`; default-deny, fail-closed;
-   only worktree-local file access, no control files (case-insensitive), one allowlisted shell
-   command at a time, no network/browser/MCP tools.
-3. **`sandbox.sb`** (macOS `sandbox-exec`) for every worker command and every verification: no
-   network, writes only to the worktree, `$HOME` and shared temp dirs unreadable, scrubbed env,
-   no launchd/AppleEvents/Shortcuts, leftover processes swept.
-4. **Claude reviews the whole patch** (with automatic `REVIEW_FLAGS`).
-5. **`verify --full` → `apply --sha`**: only the exact reviewed bytes, tested on a fresh tree at the
-   user's current HEAD, land in the user's working tree.
-
-Red-teamed twice (2026-10-11); every finding has a regression test:
+## Install or migrate
 
 ```bash
-python3 skills/auto/test_guard.py    # guard decisions (offline payloads)
-python3 skills/auto/test_worker.py   # worker flow + sandbox (fake agy, toy repo)
+./install.sh --dry-run
+./install.sh                         # both platforms
+./install.sh --platform codex        # only Codex
+./install.sh --platform claude       # only Claude
 ```
 
-Run both after any change to the guard, sandbox or worker.
+Codex installs into `~/.agents/skills/{moa,auto}`. Claude installs into
+`~/.claude/skills/{moa,auto}`. The installer replaces the old shared Claude→Codex
+link with independent links, backs up conflicts under
+`~/.local/share/moa-install-backups/`, and preserves unrelated Gemini hooks.
+A Codex-only migration also detaches a recognized old managed Claude→Codex link,
+so Claude does not silently start reading Codex instructions. Other unselected
+platform installations are left alone.
 
-## Not in git
+The shared agy guard is registered for either platform. An existing `.env` is
+preserved. When moving from an older installed checkout, its existing local key
+file is copied if the new checkout has none; otherwise `.env.example` is used.
+Old run records remain in their original checkout. Re-running the installer
+is safe. Start a fresh session if the current host has cached skill instructions.
 
-`skills/moa/.env` (API keys), `skills/auto/runs/`, `runs.jsonl`, `logs/` (local run records).
+## Inspect routes without calling models
+
+```bash
+python3 skills/moa/moa_runner.py --platform codex --show-config
+python3 skills/moa/moa_runner.py --platform claude --dry-run
+```
+
+These commands do not load credentials or send requests. `native_roles` are
+instructions for the host coordinator; `agy_routes` select external coding workers.
+These settings do not change the active chat model,
+automatically create an Astra session, or send OpenAI model IDs to Antigravity.
+
+For API-backed Q&A, both application profiles default to raw collection:
+
+```bash
+python3 skills/moa/moa_runner.py --platform codex --models deepseek,minimax --coordinator-model current --task-id example -- 'Question to compare'
+```
+
+The coordinator synthesizes successful answers. Installed platform entrypoints
+infer their platform even when `--platform` is omitted. Use `--platform headless`
+only when an additional paid API aggregator is wanted. A bare invocation of the
+shared core script retains legacy headless behavior. `--raw`, `--review`, `--glm52`
+and existing output markers remain
+available. External provider model defaults are preserved; offline tests do not
+establish their current live API availability.
+
+## Coding execution and records
+
+The `/auto` executor remains **agy**, including when `--platform codex` is recorded.
+Native Codex/Claude subagents help with read-only planning and review; they do not
+inherit agy hooks or sandboxing. Delegated implementation follows the
+[shared coding workflow](shared/auto-workflow.md).
+
+The executor retains disposable standalone repos, a default-deny guard, macOS
+sandboxing, process cleanup and whole-patch review. Applying requires the reviewed
+SHA, full verification against the current HEAD, clean target files and protected
+path checks. `.codex` is protected at any depth, including mixed-case paths.
+
+Runs identify the platform, coordinator model (or `current` when unknown), task ID
+and executor. API records live under `skills/moa/runs/`; coding records and ledger
+remain under `skills/auto/runs/` and `runs.jsonl`. IDs are unique across concurrent
+starts. Same-run resume/verify/apply must stay sequential; there is no persistent
+queue or crash-recovery service. Records may contain model output, briefs or
+patches and are ignored by Git.
+
+## Offline verification
+
+```bash
+python3 skills/moa/test_runner.py
+python3 skills/auto/test_guard.py
+python3 skills/auto/test_worker.py
+python3 tests/test_install.py
+python3 tests/test_platforms.py
+```
+
+Runner tests mock providers. Worker tests use fake agy and temporary toy repos;
+installer tests use temporary homes. Sandbox tests require macOS `sandbox-exec`.
+They make no paid model calls. Run both auto suites after changing the guard,
+sandbox or worker; run affected runner/installer suites for their changes.

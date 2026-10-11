@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch and manage Antigravity (agy) workers for Claude's /auto skill.
+"""Launch and manage Antigravity (agy) workers for shared /auto skills.
 
 Every worker gets its own STANDALONE repo under $TMPDIR/auto-worker/<id> holding only the
 base commit (shallow fetch: no stash, no other branches, no remotes, no credentials from the
@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 SKILL_DIR = os.path.dirname(os.path.realpath(__file__))
 RUNS = os.path.join(SKILL_DIR, "runs")
@@ -52,7 +53,7 @@ SAFE_GIT = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "-c", "co
 ATTR_OFF = [f"--attr-source={EMPTY_TREE}"]
 GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
 # Paths that need Claude's explicit, line-by-line attention (reported in every summary).
-PROTECTED_RE = re.compile(r"(^|/)(\.git|\.claude|\.agents?|_agents?|\.gemini|\.github|\.vscode|\.idea|\.?venv)(/|$)"
+PROTECTED_RE = re.compile(r"(^|/)(\.git|\.claude|\.codex|\.agents?|_agents?|\.gemini|\.github|\.vscode|\.idea|\.?venv)(/|$)"
                           r"|(^|/)(agents\.md|gemini\.md|claude\.md|\.gitmodules|\.gitignore|\.gitattributes|\.envrc"
                           r"|\.flaskenv|\.pre-commit-config\.ya?ml|sitecustomize\.py|usercustomize\.py)$|\.pth$", re.I)
 SENSITIVE_RE = re.compile(r"(^|/)(deploy|node-managers|scripts|migrations)/|^(run\.sh|wsgi\.py|requirements[^/]*\.txt"
@@ -66,7 +67,7 @@ PREAMBLE = """You are a coding worker. Rules for this run (enforced by a guard; 
 - Shell: one simple command per call (no pipes, ;, &&, redirects, $()), read-only tools, git
   status/diff/log/show, `python -m pytest`, `node --test`. No network, no installs, no ssh, no git
   commit/push. If something you need is denied, say so in your final reply instead of working around it.
-- Do not edit AGENTS.md, .gitignore, .gitattributes, .git, .claude, .agents, .github or venv files.
+- Do not edit AGENTS.md, .gitignore, .gitattributes, .git, .claude, .codex, .agents, .github or venv files.
 - Do not leave background processes running when you finish.
 - Finish with a short report: what you changed (files), what you verified (exact test commands and
   results), and anything you were unsure about or could not do.
@@ -168,7 +169,17 @@ def meta_path(rid):
 
 def load(rid):
     with open(meta_path(rid)) as f:
-        return json.load(f)
+        m = json.load(f)
+    # Existing runs predate platform metadata and were coordinated from Claude.
+    m.update(coordination(m))
+    return m
+
+
+def coordination(m):
+    """Coordination provenance only; every platform still uses the agy executor."""
+    return {"platform": m.get("platform", "claude"),
+            "coordinator_model": m.get("coordinator_model", "current"),
+            "task_id": m.get("task_id"), "executor": "agy"}
 
 
 def save(m):
@@ -329,7 +340,7 @@ def invoke(m, brief_file, timeout, conversation=None):
     ev = guard_events(m["id"])
     m["guard"] = {"allowed": sum(e.get("decision") == "allow" for e in ev),
                   "denied": [f'{e.get("tool")}: {e.get("reason")}' for e in ev if e.get("decision") == "deny"]}
-    summary = {"run": m["id"], "round": rnd, "status": status, "seconds": m["rounds"][-1]["seconds"],
+    summary = {"run": m["id"], **coordination(m), "round": rnd, "status": status, "seconds": m["rounds"][-1]["seconds"],
                "gemini_tokens": m["rounds"][-1]["usage"], "worktree": m["worktree"]}
     try:
         cap = capture(m, rnd)
@@ -355,7 +366,7 @@ def cmd_run(a):
     repo = user_git(a.repo, "rev-parse", "--show-toplevel").decode().strip()
     base = user_git(repo, "rev-parse", "--verify", a.base + "^{commit}").decode().strip()
     slug = re.sub(r"[^a-z0-9-]+", "-", (a.name or "task").lower()).strip("-")[:40] or "task"
-    rid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + slug
+    rid = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + slug + "-" + uuid.uuid4().hex[:12]
     os.makedirs(WT_BASE, exist_ok=True)
     os.makedirs(os.path.join(RUNS, rid))
     wt = make_tree(repo, os.path.join(WT_BASE, rid), base)
@@ -363,6 +374,7 @@ def cmd_run(a):
     venv = a.venv or next((v for v in (os.path.join(repo, "venv"), os.path.join(os.path.dirname(common), "venv"))
                            if os.path.isfile(os.path.join(v, "bin", "python"))), "")
     m = {"id": rid, "repo": repo, "base": base, "worktree": wt, "model": a.model, "venv": venv,
+         "platform": a.platform, "coordinator_model": a.coordinator_model, "task_id": a.task_id, "executor": "agy",
          "created": datetime.datetime.now().isoformat(timespec="seconds"), "rounds": [], "verified": []}
     save(m)
     invoke(m, a.brief, a.timeout)
@@ -466,7 +478,7 @@ def cmd_record(a):
         tok["output"] += u.get("output_tokens", 0)
         tok["cache_read"] += u.get("cache_read_tokens", 0)
     final = (m.get("applied") or {}).get("sha256") or (m["rounds"][-1].get("sha256") if m["rounds"] else None)
-    entry = {"date": m["created"][:10], "run": m["id"], "repo": os.path.basename(m["repo"]),
+    entry = {"date": m["created"][:10], "run": m["id"], **coordination(m), "repo": os.path.basename(m["repo"]),
              "level": a.level, "model": m["model"], "rounds": len(m["rounds"]),
              "statuses": [r["status"] for r in m["rounds"]],
              "seconds": round(sum(r["seconds"] for r in m["rounds"]), 1), "gemini_tokens": tok,
@@ -506,6 +518,10 @@ def main():
     r.add_argument("--repo", required=True)
     r.add_argument("--brief", required=True)
     r.add_argument("--model", default="gemini-3.1-pro-high")
+    r.add_argument("--platform", choices=["codex", "claude", "headless"], default="claude",
+                   help="coordinating platform (executor remains agy)")
+    r.add_argument("--coordinator-model", default="current", help="coordinator identity for provenance")
+    r.add_argument("--task-id", help="optional task ID from the coordinating platform")
     r.add_argument("--base", default="HEAD")
     r.add_argument("--name")
     r.add_argument("--venv")

@@ -37,11 +37,11 @@ READ_TOOLS = {"view_file", "list_dir", "grep_search", "find_by_name",
               "view_file_outline", "view_code_item", "codebase_search", "command_status"}
 WRITE_TOOLS = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
 
-# First path component (relative to the worktree) that a worker may never write, and file
-# names it may never write anywhere. Compared case- and normalization-insensitively: APFS is
+# Directory components and file names that a worker may never write at any depth.
+# Compared case- and normalization-insensitively: APFS is
 # case-insensitive, so ".GIT" IS ".git" (a rewritten .git pointer file would hijack every
 # host-side git command run in the worktree).
-PROTECTED_DIRS = {".git", ".claude", ".agents", ".agent", "_agents", "_agent",
+PROTECTED_DIRS = {".git", ".claude", ".codex", ".agents", ".agent", "_agents", "_agent",
                   ".gemini", ".github", ".vscode", ".idea", "venv", ".venv", "node_modules"}
 PROTECTED_NAMES = {"agents.md", "gemini.md", "claude.md", ".git", ".gitmodules", ".gitignore",
                    ".gitattributes", ".envrc", ".flaskenv", ".pre-commit-config.yaml",
@@ -115,7 +115,7 @@ def check_write(path, ctx):
     if not within(p, ctx["root"]):
         raise Deny(f"write outside the worktree: {path} (worktree is {ctx['root']})")
     parts = rel_parts(p, ctx["root"])
-    if (parts[0] in PROTECTED_DIRS or ".git" in parts or parts[-1] in PROTECTED_NAMES
+    if (any(part in PROTECTED_DIRS for part in parts) or parts[-1] in PROTECTED_NAMES
             or parts[-1].endswith(PROTECTED_SUFFIXES)):
         raise Deny(f"{os.path.relpath(p, ctx['root'])} is a protected control file; do not modify it")
     if SECRET_RE.search(p):

@@ -6,6 +6,7 @@
 skills/auto/runs/
 skills/auto/runs.jsonl
 skills/auto/logs/
+skills/moa/runs/
 
 __pycache__/
 *.pyc

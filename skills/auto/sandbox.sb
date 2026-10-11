@@ -33,6 +33,7 @@
   (subpath (string-append (param "ROOT") "/.git"))
   (literal (string-append (param "ROOT") "/.git"))
   (subpath (string-append (param "ROOT") "/.claude"))
+  (subpath (string-append (param "ROOT") "/.codex"))
   (subpath (string-append (param "ROOT") "/.agents"))
   (subpath (string-append (param "ROOT") "/.agent"))
   (subpath (string-append (param "ROOT") "/.gemini"))
@@ -52,7 +53,7 @@
   (literal (string-append (param "ROOT") "/.pre-commit-config.yaml"))
   (require-all (subpath (param "ROOT"))
     (regex #"/\.[gG][iI][tT](/|$)"
-           #"/(\.[cC][lL][aA][uU][dD][eE]|\.[aA][gG][eE][nN][tT][sS]?|_[aA][gG][eE][nN][tT][sS]?|\.[gG][eE][mM][iI][nN][iI]|\.[gG][iI][tT][hH][uU][bB]|\.[vV][sS][cC][oO][dD][eE]|\.[iI][dD][eE][aA]|\.?[vV][eE][nN][vV])(/|$)"
+           #"/(\.[cC][lL][aA][uU][dD][eE]|\.[cC][oO][dD][eE][xX]|\.[aA][gG][eE][nN][tT][sS]?|_[aA][gG][eE][nN][tT][sS]?|\.[gG][eE][mM][iI][nN][iI]|\.[gG][iI][tT][hH][uU][bB]|\.[vV][sS][cC][oO][dD][eE]|\.[iI][dD][eE][aA]|\.?[vV][eE][nN][vV])(/|$)"
            #"/\.([eE][nN][vV][rR][cC]|[fF][lL][aA][sS][kK][eE][nN][vV]|[gG][iI][tT]([aA][tT][tT][rR][iI][bB][uU][tT][eE][sS]|[iI][gG][nN][oO][rR][eE]|[mM][oO][dD][uU][lL][eE][sS])|[pP][rR][eE]-[cC][oO][mM][mM][iI][tT]-[cC][oO][nN][fF][iI][gG]\.[yY][aA]?[mM][lL])$"
            #"/([aA][gG][eE][nN][tT][sS]|[cC][lL][aA][uU][dD][eE]|[gG][eE][mM][iI][nN][iI])\.[mM][dD]$"
            #"\.[pP][tT][hH]$"
