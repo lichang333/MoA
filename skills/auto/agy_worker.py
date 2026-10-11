@@ -339,6 +339,21 @@ def valid_conversation(value):
         r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value) is not None
 
 
+def agy_argv():
+    """argv prefix for invoking agy headless.
+
+    On headless Linux without a D-Bus session bus, agy's keyring lookup hangs
+    ~10s and then fails even when the OAuth token file exists and is valid
+    (~/.gemini/antigravity-cli/antigravity-oauth-token). Wrapping the call in a
+    throwaway bus lets the lookup fail fast so agy falls back to the token file.
+    Skipped when a session bus is already present (the token may live in that
+    keyring) and where dbus-run-session is unavailable (e.g. macOS).
+    """
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and shutil.which("dbus-run-session"):
+        return ["dbus-run-session", "--", "agy"]
+    return ["agy"]
+
+
 def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None):
     rnd = next_round(m)
     run_dir = os.path.join(RUNS, m["id"])
@@ -353,8 +368,8 @@ def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None):
             prompt = PREAMBLE + f.read() + "\n\nFEEDBACK ON YOUR PREVIOUS ATTEMPT (already in the tree):\n" + brief
     env = min_env(AUTO_WORKER="1", AUTO_WORKER_ROOT=m["worktree"], AUTO_RUN_ID=m["id"],
                   AUTO_WORKER_GITDIR=os.path.join(m["worktree"], ".git"), AUTO_WORKER_VENV=m.get("venv") or "")
-    cmd = ["agy", "-p", prompt, "--model", m["model"], "--dangerously-skip-permissions",
-           "--output-format", "json", "--print-timeout", f"{timeout}s"]
+    cmd = agy_argv() + ["-p", prompt, "--model", m["model"], "--dangerously-skip-permissions",
+                       "--output-format", "json", "--print-timeout", f"{timeout}s"]
     if conversation:
         cmd += ["--conversation", conversation]
     t0, status, out, err, code = time.time(), None, b"", b"", None
