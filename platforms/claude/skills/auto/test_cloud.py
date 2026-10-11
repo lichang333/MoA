@@ -1,0 +1,1 @@
+../../../../skills/auto/test_cloud.py

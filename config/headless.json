@@ -1,6 +1,11 @@
 {
   "mode": "aggregate",
   "native_roles": {"coordinator": "current"},
+  "cloud_defaults": {
+    "model": "sonnet",
+    "allowed_models": ["sonnet", "opus"],
+    "funding_max_age_minutes": 60
+  },
   "agy_routes": {
     "l1": "gemini-3.8-flash-high",
     "l2": "gemini-3.1-pro-high",

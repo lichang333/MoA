@@ -1,0 +1,1 @@
+../../../../skills/auto/claude_cloud.py

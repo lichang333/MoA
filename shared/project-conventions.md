@@ -13,6 +13,9 @@
   `python3 skills/auto/test_worker.py`. Runner changes require
   `python3 skills/moa/test_runner.py`; installer changes require
   `python3 tests/test_install.py`. These tests use local fixtures and no live models.
+- Cloud transport changes also require `python3 skills/auto/test_cloud.py`.
+  Imported cloud code must use the same local sandbox, full verification and
+  reviewed-SHA apply gates. Observed credit/plan data is not a live spending cap.
 - After editing a platform skill, validate its frontmatter and check its links.
   Run `python3 tests/test_platforms.py` to check complete installable entrypoints.
   State which checks ran and any untested live integration in the final report.

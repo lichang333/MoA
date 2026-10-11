@@ -1,23 +1,27 @@
 # Shared delegated coding workflow
 
-The coordinator owns the brief, review, verification and integration. The external
-executor is Antigravity (`agy`) regardless of the coordinating platform. Workers
-start from a commit and do not see the user's uncommitted changes.
+The coordinator owns the brief, review, verification and integration. External
+executors are Antigravity (`agy`) and the explicit [Claude cloud bridge](cloud-workflow.md).
+Both start from a commit and exclude the user's uncommitted changes. Choose cloud
+for suitable GitHub work with observed eligible funding; agy retains its local
+guard and sandbox. Neither executor's model selection proves remaining allowance.
 
 ## Execution boundaries
 
-- Workers use `agy_worker.py`; never run skip-permissions agy separately. Its
+- Local agy workers use `agy_worker.py`; never run skip-permissions agy separately. Its
   `AUTO_WORKER=1` guard is default-deny. Do not loosen the guard to complete a task.
 - No production, SSH, deployment, credentials or live databases in worker tasks.
   The coordinator handles such work under the user's existing authorization.
-- Worker code, including tests, runs through the macOS sandbox. Do not execute it
-  unsandboxed in the user's checkout, even after review.
+- Local worker code, including imported cloud tests, runs through the macOS
+  sandbox. Do not execute it unsandboxed in the user's checkout, even after review.
+  Cloud execution uses Anthropic's environment and does not inherit the agy guard.
 - Apply only a fully reviewed patch SHA with passing `verify --full` against the
   current target HEAD and clean target files. A new worker round requires review
   and verification of the new patch.
 - Native Codex/Claude subagents do not inherit agy hooks or this sandbox. Within
   this workflow use them for read-only planning/review; delegated implementation
-  uses agy. The coordinator can implement small changes directly.
+  uses agy or the documented cloud route. The coordinator can implement small
+  changes and execution-boundary changes directly.
 
 ## Triage and briefing
 
@@ -28,8 +32,14 @@ start from a commit and do not see the user's uncommitted changes.
 | L2 | Multi-file feature or bug with clear acceptance criteria | Profile's `agy_routes.l2` |
 | L3 | Architecture, ambiguity or consequential logic | Plan first, then split into L1/L2; independent review as needed |
 
+These are the local agy defaults. An explicit cloud preference can route a small
+or L1/L2 GitHub task through the cloud workflow instead; size alone is not a reason
+to ignore that preference. Production/credential work and changes to the execution
+guard or sandbox still stay with the coordinator.
+
 Announce the chosen level and model. User model choices take priority when the
-executor supports them. Read `routing.json` and its [shared defaults](headless.json)
+executor supports them. Read `routing.json` and its shared defaults, `headless.json`
+(installed next to the skill; source is `config/headless.json`),
 for `agy_routes`; `agy models` can confirm external
 executor availability. Do not substitute an OpenAI model ID into the agy CLI.
 

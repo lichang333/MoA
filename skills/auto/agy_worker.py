@@ -22,7 +22,9 @@ attributes read from the empty tree (in-tree .gitattributes ignored), global/sys
 ignored, and all git output handled as bytes with NUL-separated, unquoted paths.
 """
 import argparse
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -82,7 +84,7 @@ def git(tree, *args, check=True, cwd=None):
     """git on a tree we created, with an explicit git dir and everything steerable switched off.
     Returns stdout as BYTES (never decoded: a lone CR in file content must stay a CR)."""
     cmd = ["git", *SAFE_GIT, *ATTR_OFF, f"--git-dir={os.path.join(tree, '.git')}", f"--work-tree={tree}", *args]
-    r = subprocess.run(cmd, capture_output=True, cwd=cwd or tree, env=dict(os.environ, **GIT_ENV))
+    r = subprocess.run(cmd, capture_output=True, cwd=cwd or tree, env=min_env(**GIT_ENV))
     if check and r.returncode:
         raise RuntimeError(f"git {' '.join(args[:3])} failed: {r.stderr.decode(errors='replace')[-800:]}")
     return r.stdout
@@ -90,7 +92,7 @@ def git(tree, *args, check=True, cwd=None):
 
 def user_git(repo, *args, check=True):
     """git in the USER's checkout (trusted repo), with the same hardening; bytes out."""
-    r = subprocess.run(["git", *SAFE_GIT, "-C", repo, *args], capture_output=True, env=dict(os.environ, **GIT_ENV))
+    r = subprocess.run(["git", *SAFE_GIT, "-C", repo, *args], capture_output=True, env=min_env(**GIT_ENV))
     if check and r.returncode:
         raise RuntimeError(f"git {' '.join(args[:3])} failed: {r.stderr.decode(errors='replace')[-800:]}")
     return r.stdout
@@ -121,7 +123,7 @@ def make_tree(repo, path, sha):
     """Standalone repo at `sha` with nothing else from the user's repo in it."""
     rmtree_tree(path)
     os.makedirs(path)
-    subprocess.run(["git", "init", "-q", path], check=True, env=dict(os.environ, **GIT_ENV))
+    subprocess.run(["git", "init", "-q", path], check=True, env=min_env(**GIT_ENV))
     git(path, "fetch", "-q", "--depth=1", "--no-tags", os.path.realpath(repo), sha)
     git(path, "checkout", "-q", "--detach", "FETCH_HEAD")
     return os.path.realpath(path)
@@ -175,11 +177,34 @@ def load(rid):
     return m
 
 
+@contextlib.contextmanager
+def run_lock(rid):
+    """Both CLI entrypoints hold this lock for the entire read/modify/write cycle.
+
+    Keep the lock in the retained run directory, including while cleaning trees.
+    Command handlers are internal; callers invoking them directly own this lock.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,160}", rid):
+        raise ValueError("invalid run ID")
+    with open(os.path.join(RUNS, rid, ".run.lock"), "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("run is busy; same-run operations must be sequential") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def coordination(m):
-    """Coordination provenance only; every platform still uses the agy executor."""
+    """Host-recorded provenance; old records predate the cloud transport."""
+    executor = m.get("executor", "agy")
+    if executor not in ("agy", "claude-cloud"):
+        raise ValueError(f"unknown executor: {executor}")
     return {"platform": m.get("platform", "claude"),
             "coordinator_model": m.get("coordinator_model", "current"),
-            "task_id": m.get("task_id"), "executor": "agy"}
+            "task_id": m.get("task_id"), "executor": executor}
 
 
 def save(m):
@@ -221,7 +246,7 @@ def patch_paths(patch_file, cwd):
     if not os.path.getsize(patch_file):
         return [], []
     out = zsplit(subprocess.run(["git", *SAFE_GIT, "apply", "--numstat", "-z", patch_file], cwd=cwd,
-                                capture_output=True, env=dict(os.environ, **GIT_ENV), check=True).stdout)
+                                capture_output=True, env=min_env(**GIT_ENV), check=True).stdout)
     paths, binary, i = [], [], 0
     while i < len(out):
         add, dele, path = (out[i].split("\t", 2) + ["", ""])[:3]
@@ -382,6 +407,8 @@ def cmd_run(a):
 
 def cmd_resume(a):
     m = load(a.run_id)
+    if m["executor"] != "agy":
+        sys.exit("REFUSED: use claude_cloud.py send for cloud runs; no agy fallback")
     if not os.path.isdir(m["worktree"]):
         sys.exit("worktree is gone; start a new run")
     invoke(m, a.brief, a.timeout, conversation=m.get("conversation"))
@@ -402,6 +429,8 @@ def sandboxed(m, root, argv):
 
 def cmd_test(a):
     m = load(a.run_id)
+    if m["executor"] != "agy":
+        sys.exit("REFUSED: cloud results must use verify, not the launch tree")
     wt = m["worktree"]
     git(wt, "add", "-A", "--", ".", *DIFF_EXCLUDES)
     tree = git(wt, "write-tree").decode().strip()
@@ -421,7 +450,7 @@ def cmd_verify(a):
         vwt = make_tree(m["repo"], os.path.join(WT_BASE, m["id"] + "-verify"), onto)
         if data:
             r = subprocess.run(["git", *SAFE_GIT, f"--git-dir={vwt}/.git", f"--work-tree={vwt}", "apply", copy],
-                               cwd=vwt, capture_output=True, env=dict(os.environ, **GIT_ENV))
+                               cwd=vwt, capture_output=True, env=min_env(**GIT_ENV))
             if r.returncode:
                 sys.exit(f"patch does not apply onto {a.onto} ({onto[:10]}):\n{r.stderr.decode(errors='replace')}")
         rc = sandboxed(m, vwt, a.cmd)
@@ -486,6 +515,10 @@ def cmd_record(a):
              "guard_denials": len((m.get("guard") or {}).get("denied", [])),
              "verified": any(v["rc"] == 0 and v.get("full") and v["sha256"] == final for v in m.get("verified", [])),
              "applied": bool(m.get("applied")), "notes": a.notes or ""}
+    if m["executor"] == "claude-cloud":
+        entry.pop("gemini_tokens")
+        entry.update(usage=None, cost_usd=None, session_id=m.get("session_id"),
+                     funding_source=(m.get("funding") or {}).get("source"))
     with open(LEDGER, "a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     m["outcome"] = entry
@@ -562,7 +595,11 @@ def main():
     argv = argv[:argv.index("--")] if "--" in argv else argv
     a = ap.parse_args(argv)
     a.cmd = cmd
-    a.fn(a)
+    try:
+        with run_lock(a.run_id) if hasattr(a, "run_id") else contextlib.nullcontext():
+            a.fn(a)
+    except ValueError as error:
+        ap.exit(1, "REFUSED: " + str(error) + "\n")
 
 
 if __name__ == "__main__":

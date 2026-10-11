@@ -4,8 +4,10 @@ Read [the shared project conventions](shared/project-conventions.md) when workin
 
 Use `platforms/claude/skills/` for Claude-specific instructions and
 `config/claude.json` for routing. The current Claude session handles dispatch,
-web research, synthesis and code review. External coding workers use the shared
-agy executor; shared code lives in `skills/` and must not be duplicated here.
+web research, synthesis and code review. External coding workers use agy or the
+explicit Claude cloud bridge in `shared/cloud-workflow.md`; shared code lives in
+`skills/` and must not be duplicated here. Cloud workers complete their assigned
+brief without recursively dispatching more workers.
 
 The Codex entrypoints describe different native tools and model roles. Do not
 load them as the Claude workflow or replace the Claude installation with them.

@@ -7,7 +7,7 @@ and the coordinator reviews and integrates the result.
 | Workflow | Purpose | Execution |
 |---|---|---|
 | `/moa` | Multi-model Q&A and analysis | Native analysis or external API answers; current-session synthesis |
-| `/auto` | Delegated coding | agy workers in isolated repos; sandboxed verification and reviewed-patch apply |
+| `/auto` | Delegated coding | agy workers or explicit Claude cloud sessions; local sandbox verification and reviewed-patch apply |
 
 Codex uses the current session for dispatch and integration, with Astra for complex
 planning or important review. Claude keeps its own tools and routes. Provider
@@ -23,7 +23,7 @@ platforms/claude/skills/        Claude moa and auto skill entrypoints
 shared/                        common project and workflow rules
 config/                        provider defaults and platform routing profiles
 skills/moa/                    shared API runner and offline tests
-skills/auto/                   shared agy executor, guard, sandbox and tests
+skills/auto/                   agy executor, Claude cloud bridge, guard, sandbox and tests
 tests/                         installer tests
 ```
 
@@ -82,12 +82,13 @@ establish their current live API availability.
 
 ## Coding execution and records
 
-The `/auto` executor remains **agy**, including when `--platform codex` is recorded.
+`--platform codex` identifies the coordinator. Executors are **agy** and the
+explicit **claude-cloud** bridge, recorded separately.
 Native Codex/Claude subagents help with read-only planning and review; they do not
 inherit agy hooks or sandboxing. Delegated implementation follows the
 [shared coding workflow](shared/auto-workflow.md).
 
-The executor retains disposable standalone repos, a default-deny guard, macOS
+The agy executor retains disposable standalone repos, a default-deny guard, macOS
 sandboxing, process cleanup and whole-patch review. Applying requires the reviewed
 SHA, full verification against the current HEAD, clean target files and protected
 path checks. `.codex` is protected at any depth, including mixed-case paths.
@@ -99,12 +100,47 @@ starts. Same-run resume/verify/apply must stay sequential; there is no persisten
 queue or crash-recovery service. Records may contain model output, briefs or
 patches and are ignored by Git.
 
+## Claude cloud credits and subscription execution
+
+The [cloud workflow](shared/cloud-workflow.md) uses the official signed-in Claude
+CLI, with no Anthropic API key. Prefer unexpired eligible cloud credits for
+suitable GitHub tasks when minimizing new cash spending. It supports preparing
+bounded briefs, launching or attaching cloud sessions, submitting follow-ups and
+importing an already-fetched result commit. Imported code still requires whole
+patch review, local macOS sandbox verification and reviewed-SHA apply.
+
+```bash
+python3 skills/auto/claude_cloud.py prepare --repo "$PWD" --brief '<brief.md>' --platform codex
+python3 skills/auto/claude_cloud.py attach '<run-id>' --session '<Claude-cloud-session-URL>'
+python3 skills/auto/claude_cloud.py status '<run-id>'
+```
+
+These three commands call no model. Before `launch` or `send`, record a recent
+actual account-panel observation with `observe-funding`; when attaching an older
+session, prepare with `--base '<confirmed-cloud-start-commit>'` and its original
+brief rather than assuming local HEAD. For funding fields,
+use `--help` or the
+workflow for fields. Unknown/stale/expired funding is refused. Each observation
+is single-use, repeated observations cannot reset it, and same-run mutations are
+locked. This preflight is not a live spending cap: ongoing cloud tasks can use
+regular subscription allowance after promo credit is depleted. Extra usage must
+remain off; the bridge never purchases credits or falls back to a paid API.
+
+Progress and resulting branch/model are checked in the Claude UI. Local status
+does not pretend to know remote completion, remaining quota or actual cost.
+Requested and observed model families are separate. Cloud execution does not
+inherit agy's guard, and the remote GitHub branch can advance after launch
+preflight; the cloud brief must check the expected base before starting.
+Automatic quota polling, background scheduling and Claude-local delegation are
+not implemented.
+
 ## Offline verification
 
 ```bash
 python3 skills/moa/test_runner.py
 python3 skills/auto/test_guard.py
 python3 skills/auto/test_worker.py
+python3 skills/auto/test_cloud.py
 python3 tests/test_install.py
 python3 tests/test_platforms.py
 ```
