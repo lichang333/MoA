@@ -1,0 +1,12 @@
+{
+  "claude-auto-worker-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {"type": "command", "command": "~/.claude/skills/auto/agy_guard.py", "timeout": 15}
+        ]
+      }
+    ]
+  }
+}

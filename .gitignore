@@ -1,0 +1,12 @@
+# API keys stay on this machine (moa_runner reads skills/moa/.env)
+.env
+!.env.example
+
+# /auto local state: run records (briefs, patches), the ledger, guard decision log
+skills/auto/runs/
+skills/auto/runs.jsonl
+skills/auto/logs/
+
+__pycache__/
+*.pyc
+.DS_Store

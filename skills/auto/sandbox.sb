@@ -1,0 +1,106 @@
+;; macOS sandbox for anything an /auto worker's code runs: its own commands (via the agy
+;; guard) and Claude's verification runs (agy_worker.py test / verify).
+;; Params: ROOT (worktree), GITDIR (its git common dir), VENV, TMP (private per-run temp
+;; dir), HOME. run_sandboxed.sh also clears the environment before exec.
+;;
+;; Posture: no network at all; writes only to ROOT (minus control files) and TMP; nothing
+;; under $HOME or the shared temp dirs is readable except ROOT/GITDIR/VENV/TMP; no links in ROOT; no signals to
+;; other processes; no tools or mach services that hand work to code outside the sandbox.
+;; Red-teamed 2026-10-11 (see SKILL.md "Security model").
+(version 1)
+(allow default)
+
+;; --- network: none, unix sockets included (no exfiltration, no ssh to the fleet, no
+;; package installs, no ssh-agent / docker / other local daemons)
+(deny network*)
+
+;; --- writes: worktree + private temp + the usual device files only
+(deny file-write*)
+(allow file-write*
+  (subpath (param "ROOT"))
+  (subpath (param "TMP"))
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper")
+  (regex #"^/dev/fd/")
+  (regex #"^/dev/ttys[0-9]+$"))
+;; no new symlinks or hard links in the worktree: agy's own (unsandboxed) file tools write
+;; there, and a link planted by a background test process could redirect them.
+;; (Symlinks stay allowed in TMP: the tests build fake venvs there.)
+(deny file-write-create (require-all (vnode-type SYMLINK) (subpath (param "ROOT"))))
+(deny file-link)
+;; never the worktree's control files (mirrors agy_guard.py PROTECTED_*). literal/subpath
+;; match case-insensitively on APFS; the regexes spell out both cases.
+(deny file-write*
+  (subpath (string-append (param "ROOT") "/.git"))
+  (literal (string-append (param "ROOT") "/.git"))
+  (subpath (string-append (param "ROOT") "/.claude"))
+  (subpath (string-append (param "ROOT") "/.agents"))
+  (subpath (string-append (param "ROOT") "/.agent"))
+  (subpath (string-append (param "ROOT") "/.gemini"))
+  (subpath (string-append (param "ROOT") "/.github"))
+  (subpath (string-append (param "ROOT") "/.vscode"))
+  (subpath (string-append (param "ROOT") "/.idea"))
+  (subpath (string-append (param "ROOT") "/venv"))
+  (subpath (string-append (param "ROOT") "/.venv"))
+  (literal (string-append (param "ROOT") "/AGENTS.md"))
+  (literal (string-append (param "ROOT") "/GEMINI.md"))
+  (literal (string-append (param "ROOT") "/CLAUDE.md"))
+  (literal (string-append (param "ROOT") "/.gitmodules"))
+  (literal (string-append (param "ROOT") "/.gitignore"))
+  (literal (string-append (param "ROOT") "/.gitattributes"))
+  (literal (string-append (param "ROOT") "/.envrc"))
+  (literal (string-append (param "ROOT") "/.flaskenv"))
+  (literal (string-append (param "ROOT") "/.pre-commit-config.yaml"))
+  (require-all (subpath (param "ROOT"))
+    (regex #"/\.[gG][iI][tT](/|$)"
+           #"/(\.[cC][lL][aA][uU][dD][eE]|\.[aA][gG][eE][nN][tT][sS]?|_[aA][gG][eE][nN][tT][sS]?|\.[gG][eE][mM][iI][nN][iI]|\.[gG][iI][tT][hH][uU][bB]|\.[vV][sS][cC][oO][dD][eE]|\.[iI][dD][eE][aA]|\.?[vV][eE][nN][vV])(/|$)"
+           #"/\.([eE][nN][vV][rR][cC]|[fF][lL][aA][sS][kK][eE][nN][vV]|[gG][iI][tT]([aA][tT][tT][rR][iI][bB][uU][tT][eE][sS]|[iI][gG][nN][oO][rR][eE]|[mM][oO][dD][uU][lL][eE][sS])|[pP][rR][eE]-[cC][oO][mM][mM][iI][tT]-[cC][oO][nN][fF][iI][gG]\.[yY][aA]?[mM][lL])$"
+           #"/([aA][gG][eE][nN][tT][sS]|[cC][lL][aA][uU][dD][eE]|[gG][eE][mM][iI][nN][iI])\.[mM][dD]$"
+           #"\.[pP][tT][hH]$"
+           #"/([sS][iI][tT][eE]|[uU][sS][eE][rR])[cC][uU][sS][tT][oO][mM][iI][zZ][eE]\.[pP][yY]$")))
+
+;; --- reads. Later rules win: nothing under $HOME, external volumes, or the shared temp dirs
+;; (other workers' trees, other Claude sessions' scratchpads), then re-allow what the work
+;; needs, then deny secret-looking files everywhere, then re-allow the private temp dir
+;; (tests create their own .db files there).
+(deny file-read-data
+  (subpath (param "HOME"))
+  (subpath "/Volumes")
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders"))
+(allow file-read-data
+  (subpath (param "ROOT"))
+  (subpath (param "GITDIR"))
+  (subpath (param "VENV")))
+(deny file-read-data
+  (regex #"/\.[eE][nN][vV]$")
+  (regex #"/\.[eE][nN][vV]\.(local|prod|production|dev|development|staging|secret)$")
+  (regex #"\.([pP][eE][mM]|[kK][eE][yY]|[pP]12|[dD][bB]|[sS][qQ][lL][iI][tT][eE]3?|[sS][eE][cC][rR][eE][tT])$")
+  (regex #"/id_[a-z0-9]+$")
+  (regex #"/(login\.txt|\.netrc|\.git-credentials|credentials)$"))
+(allow file-read-data
+  (subpath (param "TMP")))
+(deny file-read-data
+  (subpath (string-append (param "GITDIR") "/hooks")))
+
+;; --- no poking other processes
+(deny signal (target others))
+
+;; --- no handing work to code outside the sandbox: launchd/AppleEvents/LaunchServices,
+;; Shortcuts/Automator daemons, and the CLI front-ends to them.
+(deny mach-lookup
+  (global-name-regex #"^com\.apple\.(coreservices\.(appleevents|launchservicesd|quarantine)|lsd\.|shortcuts|WorkflowKit|[aA]utomator|ScriptingAdditions|AppleScript|xpc\.smd|ServiceManagement|backgroundtaskmanagement|loginwindow|dock\.|systemevents|Terminal|iTerm)")
+  (global-name "com.apple.FileCoordination")
+  (global-name "com.apple.securityd.xpc")
+  (global-name "com.apple.SecurityServer"))
+(deny process-exec
+  (literal "/usr/bin/sudo") (literal "/usr/bin/su") (literal "/usr/bin/login")
+  (literal "/bin/launchctl") (literal "/usr/bin/osascript") (literal "/usr/bin/osacompile")
+  (literal "/usr/bin/automator") (literal "/usr/bin/shortcuts") (literal "/usr/bin/open")
+  (literal "/usr/bin/defaults") (literal "/usr/bin/crontab") (literal "/usr/bin/at")
+  (literal "/usr/bin/security") (literal "/usr/bin/killall") (literal "/bin/kill")
+  (literal "/usr/bin/pkill") (literal "/sbin/shutdown") (literal "/sbin/reboot")
+  (literal "/usr/sbin/networksetup") (literal "/usr/sbin/diskutil") (literal "/usr/sbin/softwareupdate")
+  (literal "/usr/bin/sfltool") (literal "/usr/bin/tccutil") (literal "/usr/sbin/systemsetup")
+  (literal "/usr/bin/csrutil") (literal "/usr/bin/pmset")
+  (literal "/usr/bin/ssh") (literal "/usr/bin/scp") (literal "/usr/bin/sftp")
+  (literal "/usr/bin/rsync") (literal "/usr/bin/curl") (literal "/usr/bin/nc"))
