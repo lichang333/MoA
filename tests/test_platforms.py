@@ -13,7 +13,7 @@ class PlatformPackages(unittest.TestCase):
         files = {
             "moa": ("moa_runner.py", "test_runner.py"),
             "auto": ("agy_worker.py", "agy_guard.py", "run_sandboxed.sh",
-                     "sandbox.sb", "test_guard.py", "test_worker.py", "claude_cloud.py", "test_cloud.py"),
+                     "sandbox.sb", "test_guard.py", "test_worker.py", "test_recovery.py", "claude_cloud.py", "test_cloud.py"),
         }
         for platform in ("codex", "claude"):
             for skill, scripts in files.items():

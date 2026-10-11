@@ -44,6 +44,10 @@ CASES = [
     ("find -name glob", lambda: cmd("find . -name '*.py'"), "allow"),
     ("pytest", lambda: cmd("python -m pytest -q tests/test_x.py -k 'a and not b'"), "allow"),
     ("bare pytest", lambda: cmd("pytest -x"), "allow"),
+    ("unittest discovery pattern", lambda: cmd("python3 -m unittest discover -s tests -p 'test_*tv*.py' -q"), "allow"),
+    ("unittest compact pattern", lambda: cmd("python -m unittest discover -ptest_*.py"), "allow"),
+    ("unittest long pattern", lambda: cmd("python -m unittest discover --pattern=test_*.py"), "allow"),
+    ("unittest catch interrupt", lambda: cmd("python -m unittest discover -c"), "allow"),
     ("node --test", lambda: cmd("node --test tests/a.test.js"), "allow"),
     ("git diff", lambda: cmd("git diff HEAD -- app"), "allow"),
     ("view in root", lambda: run("view_file", {"AbsolutePath": ROOT + "/app/x.py"}), "allow"),
@@ -71,6 +75,17 @@ CASES = [
     ("pytest -p plugin", lambda: cmd("python -m pytest -p evil"), "deny"),
     ("pytest -pevil", lambda: cmd("python -m pytest -pevil"), "deny"),
     ("pytest --rootdir", lambda: cmd("python -m pytest --rootdir=/"), "deny"),
+    ("pytest -p=plugin", lambda: cmd("pytest -p=evil"), "deny"),
+    ("pytest -c config", lambda: cmd("pytest -c app/config.ini"), "deny"),
+    ("pytest compact config", lambda: cmd("pytest -capp/config.ini"), "deny"),
+    ("pytest override", lambda: cmd("pytest -o addopts=-x"), "deny"),
+    ("pytest compact override", lambda: cmd("pytest -oaddopts=-x"), "deny"),
+    ("unittest outside start", lambda: cmd("python -m unittest discover -s /tmp"), "deny"),
+    ("unittest outside top", lambda: cmd("python -m unittest discover -t ../outside"), "deny"),
+    ("unittest compact start", lambda: cmd("python -m unittest discover -s/tmp"), "deny"),
+    ("unittest compact top", lambda: cmd("python -m unittest discover -t../outside"), "deny"),
+    ("unittest long start", lambda: cmd("python -m unittest discover --start-directory=/tmp"), "deny"),
+    ("unittest long top", lambda: cmd("python -m unittest discover --top-level-directory /tmp"), "deny"),
     ("find -exec", lambda: cmd("find . -exec rm {} +"), "deny"),
     ("find -delete", lambda: cmd("find . -delete"), "deny"),
     ("rg --pre", lambda: cmd("rg --pre=./x foo"), "deny"),
@@ -148,10 +163,14 @@ def main():
     sb_ok = rw.split()[0].endswith("run_sandboxed.sh") and ROOT in rw
     print(("ok  " if sb_ok else "FAIL") + " allowed command is sandbox-wrapped: " + rw)
     fails += not sb_ok
+    rw = cmd("python3 -m unittest discover -s tests -p 'test_*tv*.py' -q")["overwrite"]["CommandLine"]
+    unit_ok = rw.split()[0].endswith("run_sandboxed.sh") and "'test_*tv*.py'" in rw
+    print(("ok  " if unit_ok else "FAIL") + " unittest pattern preserved inside sandbox")
+    fails += not unit_ok
     shutil.rmtree(ROOT, ignore_errors=True)
     shutil.rmtree(ROOT + ".tmp", ignore_errors=True)
     os.unlink(os.path.join(os.path.dirname(ROOT), os.path.basename(ROOT) + "-hl-src"))
-    print(f"\n{len(CASES) + 1 - fails}/{len(CASES) + 1} passed")
+    print(f"\n{len(CASES) + 2 - fails}/{len(CASES) + 2} passed")
     sys.exit(1 if fails else 0)
 
 

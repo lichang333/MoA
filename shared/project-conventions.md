@@ -10,7 +10,8 @@
 - Keep the agy default-deny guard, sandboxed execution, whole-patch review, SHA,
   HEAD and verification gates intact. Native subagents are not covered by agy hooks.
 - Security and worker changes require both `python3 skills/auto/test_guard.py` and
-  `python3 skills/auto/test_worker.py`. Runner changes require
+  `python3 skills/auto/test_worker.py`, plus `python3 skills/auto/test_recovery.py`
+  for transport recovery. Runner changes require
   `python3 skills/moa/test_runner.py`; installer changes require
   `python3 tests/test_install.py`. These tests use local fixtures and no live models.
 - Cloud transport changes also require `python3 skills/auto/test_cloud.py`.

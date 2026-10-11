@@ -95,6 +95,22 @@ send-back rounds before escalating or taking over. Every round replaces the patc
 read the full new patch and verify it again. Resume one run sequentially; the
 executor is not a persistent queue or a concurrent same-run scheduler.
 
+For agy transport failures, `run` and `resume` allow one automatic continuation
+by default; `--network-retries 0` disables it, and the maximum is two. Only exit 3
+with a structured, explicitly retryable gRPC EOF/connection error qualifies.
+Authentication, quota, local timeout/interruption, missing/mismatched session ID,
+guard denials, capture failures and review flags stop recovery for coordinator
+review. A denial earlier in the run also blocks automatic continuation.
+
+Recovery uses the same conversation and disposable repo. Each failed round keeps
+its response, usage and partial patch; the next attempt must inspect existing
+work before continuing. This is not a guarantee that actions execute exactly
+once. Backoff and all attempts share the original `--timeout` budget, with one
+shared 120-second CLI shutdown grace. Cleanup can extend wall-clock time. The
+final stdout remains one JSON summary with `network_recovery` and total
+`invocation_usage`; progress goes to stderr. Recovery never changes the provider
+or enables a paid API fallback. A failed historical run is not retried on startup.
+
 ## Integrate and record
 
 ```bash

@@ -189,10 +189,17 @@ def check_command(args, ctx):
             rest = ["-m", "pytest"] + rest
         if len(rest) < 2 or rest[0] != "-m" or rest[1] not in ("pytest", "py_compile", "unittest"):
             raise Deny("python may only run `-m pytest`, `-m py_compile` or `-m unittest`. " + ALLOWED_HELP)
-        for a in rest[2:]:
-            key = a.split("=", 1)[0]
-            if key in PYTEST_BANNED or (a.startswith("-p") and a != "-p" and not a.startswith("--")):
-                raise Deny("pytest plugin/rootdir/config overrides are not allowed")
+        if rest[1] == "pytest":
+            for a in rest[2:]:
+                key = a.split("=", 1)[0]
+                if key in PYTEST_BANNED or (a.startswith(("-p", "-c", "-o")) and not a.startswith("--")):
+                    raise Deny("pytest plugin/rootdir/config overrides are not allowed")
+        elif rest[1] == "unittest":
+            # -p is a filename pattern, -c catches Ctrl-C. They are not pytest
+            # plugin/config flags. Still check compact discovery directory args.
+            for a in rest[2:]:
+                if a.startswith(("-s", "-t")) and len(a) > 2 and not a.startswith("--"):
+                    check_read(os.path.join(cwd, a[2:]), ctx)
         py = os.path.join(venv, "bin", "python") if venv else "python3"
         final, pos = [py] + rest, rest[2:]
     elif name == "node":

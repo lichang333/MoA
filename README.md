@@ -100,6 +100,11 @@ starts. Same-run resume/verify/apply must stay sequential; there is no persisten
 queue or crash-recovery service. Records may contain model output, briefs or
 patches and are ignored by Git.
 
+agy can continue the same session once after an explicitly retryable network
+failure. `--network-retries 0` disables recovery (maximum: two). Attempts preserve
+partial patches and share the original time budget; quota/authentication errors
+or safety/review flags stop instead. See the shared workflow for the exact gates.
+
 ## Claude cloud credits and subscription execution
 
 The [cloud workflow](shared/cloud-workflow.md) uses the official signed-in Claude

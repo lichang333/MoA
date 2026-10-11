@@ -27,6 +27,7 @@ import datetime
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -305,9 +306,40 @@ def next_round(m):
     return max(nums + [len(m["rounds"])]) + 1
 
 
-def invoke(m, brief_file, timeout, conversation=None):
-    with open(brief_file) as f:
-        brief = f.read()
+def transient_network_error(stderr, code, status):
+    """Fail closed: classify only agy's structured stderr, never model prose."""
+    if code != 3 or status != "ERROR":
+        return None
+    events = []
+    for line in stderr.splitlines():
+        if line.startswith("AGY_ERROR: "):
+            try:
+                events.append(json.loads(line[len("AGY_ERROR: "):]))
+            except ValueError:
+                return None
+    if len(events) != 1 or not isinstance(events[0], dict):
+        return None
+    e = events[0]
+    message = e.get("short_error")
+    if (e.get("retryable") is not True or e.get("code_kind") != "grpc" or
+            type(e.get("error_code")) is not int or not isinstance(message, str)):
+        return None
+    if re.search(r"quota|resource.?exhausted|rate.?limit|auth|permission|credential|billing|429|401|403|deadline|timed? ?out|cancelled|canceled|interrupted", message, re.I):
+        return None
+    eof = e["error_code"] == 2 and e.get("status") == "UNKNOWN" and "unexpected eof" in message.lower()
+    unavailable = (e["error_code"] == 14 and e.get("status") == "UNAVAILABLE" and
+                   re.search(r"connection (?:reset|refused|closed)|transport is closing|broken pipe|failed to connect|temporarily unavailable", message, re.I))
+    if not (eof or unavailable):
+        return None
+    return {k: e[k] for k in ("code_kind", "error_code", "status", "retryable", "short_error")}
+
+
+def valid_conversation(value):
+    return isinstance(value, str) and re.fullmatch(
+        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value) is not None
+
+
+def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None):
     rnd = next_round(m)
     run_dir = os.path.join(RUNS, m["id"])
     with open(os.path.join(run_dir, f"brief-{rnd}.md"), "w") as f:
@@ -329,7 +361,8 @@ def invoke(m, brief_file, timeout, conversation=None):
     p = subprocess.Popen(cmd, cwd=m["worktree"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          start_new_session=True)
     try:
-        out, err = p.communicate(timeout=timeout + 120)
+        wait = timeout + 120 if hard_deadline is None else max(0, hard_deadline - time.monotonic())
+        out, err = p.communicate(timeout=wait)
         code = p.returncode
     except (subprocess.TimeoutExpired, KeyboardInterrupt) as e:
         status = "timeout" if isinstance(e, subprocess.TimeoutExpired) else "interrupted"
@@ -348,19 +381,25 @@ def invoke(m, brief_file, timeout, conversation=None):
     resp = {}
     for line in reversed(out_s.strip().splitlines()):
         try:
-            resp = json.loads(line)
-            break
+            parsed = json.loads(line)
+            if isinstance(parsed, dict):
+                resp = parsed
+                break
         except ValueError:
             continue
     status = status or resp.get("status") or f"exit {code}"
     with open(os.path.join(run_dir, f"response-{rnd}.json"), "w") as f:
-        json.dump({"exit": code, "status": status, "stderr": err_s[-4000:], "raw_tail": out_s[-2000:], **resp},
+        json.dump({**resp, "exit": code, "status": status, "stderr": err_s[-4000:], "raw_tail": out_s[-2000:]},
                   f, indent=2, ensure_ascii=False)
-    if resp.get("conversation_id"):
+    # Resumes cannot switch conversations based on an unexpected response ID.
+    if valid_conversation(resp.get("conversation_id")) and (not conversation or resp["conversation_id"] == conversation):
         m["conversation"] = resp["conversation_id"]
+    transport = transient_network_error(err_s, code, status)
     m["rounds"].append({"round": rnd, "status": status, "seconds": round(time.time() - t0, 1),
-                        "usage": resp.get("usage") or {}, "denied_actions": resp.get("denied_actions") or [],
-                        "swept_pids": swept})
+                        "usage": resp.get("usage") if isinstance(resp.get("usage"), dict) else {},
+                        "denied_actions": resp.get("denied_actions") or [],
+                        "swept_pids": swept, "exit": code, "transport_error": transport,
+                        "response_conversation": resp.get("conversation_id"), "timeout_seconds": timeout})
     save(m)   # the round is on record even if capture fails below
     ev = guard_events(m["id"])
     m["guard"] = {"allowed": sum(e.get("decision") == "allow" for e in ev),
@@ -379,9 +418,84 @@ def invoke(m, brief_file, timeout, conversation=None):
     if swept:
         summary["REVIEW_FLAGS"]["leftover_processes_killed"] = swept
     summary["guard_denied"] = m["guard"]["denied"][-15:]
-    summary["worker_report"] = (resp.get("response") or "")[-6000:]
+    summary["worker_report"] = resp["response"][-6000:] if isinstance(resp.get("response"), str) else ""
     if status != "SUCCESS":
         summary["stderr_tail"] = err_s[-1500:]
+    return summary
+
+
+def retry_blocker(m, summary, conversation):
+    last = m["rounds"][-1]
+    if not last.get("transport_error"):
+        return "not a confirmed retryable transport error"
+    sid = last.get("response_conversation")
+    if not valid_conversation(sid) or (conversation and sid != conversation):
+        return "missing or mismatched conversation ID"
+    if not last.get("sha256") or summary["REVIEW_FLAGS"]:
+        return "patch capture or review flags require coordinator review"
+    if m["guard"]["denied"] or last["denied_actions"] or last["swept_pids"]:
+        return "guard denial or leftover processes require coordinator review"
+    return None
+
+
+def invoke(m, brief_file, timeout, conversation=None, network_retries=1):
+    """Bounded same-conversation continuation; never replay into a new session.
+
+    The invocation shares one model deadline and one 120s process-exit grace.
+    Cleanup/backoff consume that budget. Recovery is not exactly-once execution.
+    """
+    if network_retries not in (0, 1, 2):
+        raise ValueError("network retries must be 0, 1 or 2")
+    with open(brief_file) as f:
+        brief = f.read()
+    deadline = time.monotonic() + timeout
+    start_round = len(m["rounds"])
+    recovered = 0
+    while True:
+        remaining = timeout if recovered == 0 else max(1, math.floor(deadline - time.monotonic()))
+        summary = invoke_attempt(m, brief, remaining, conversation, hard_deadline=deadline + 120)
+        blocker = retry_blocker(m, summary, conversation)
+        if blocker or recovered >= network_retries:
+            reason = blocker or "network retry limit reached"
+            break
+        delay = 5 * (2 ** recovered)
+        if deadline - time.monotonic() < delay + 30:
+            reason = "insufficient time remaining in the original budget"
+            break
+        # Persist the decision before waiting or submitting another request.
+        m["rounds"][-1]["recovery"] = {"state": "scheduled", "delay_seconds": delay}
+        save(m)
+        print(f"Network error in round {summary['round']}; continuing the same conversation "
+              f"after {delay}s (recovery {recovered + 1}/{network_retries}).", file=sys.stderr)
+        try:
+            time.sleep(delay)
+        except KeyboardInterrupt:
+            m["rounds"][-1]["recovery"]["state"] = "cancelled"
+            reason = "interrupted during recovery backoff"
+            break
+        if deadline - time.monotonic() < 30:
+            m["rounds"][-1]["recovery"]["state"] = "cancelled"
+            reason = "insufficient time remaining in the original budget"
+            break
+        m["rounds"][-1]["recovery"]["state"] = "continuation_requested"
+        save(m)
+        conversation = m["conversation"]
+        brief = (PREAMBLE + "The preceding attempt ended with a transport error. Continue the SAME task "
+                 "in this SAME conversation and worktree. First inspect current files and prior tool results; "
+                 "changes may already exist. Do not replay completed operations or reset files. Do not start "
+                 "a new task or repeat external side effects. If completion is ambiguous, report it and stop. "
+                 "Finish only the remaining work from the preceding brief and report exact checks.")
+        recovered += 1
+    summary["network_recovery"] = {"retries": recovered, "limit": network_retries, "stop_reason":
+                                   "completed" if summary["status"] == "SUCCESS" else reason}
+    usage = {}
+    for r in m["rounds"][start_round:]:
+        for k, value in r["usage"].items():
+            if type(value) in (int, float):
+                usage[k] = usage.get(k, 0) + value
+    summary["invocation_usage"] = usage
+    m["network_recovery"] = summary["network_recovery"]
+    save(m)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
@@ -402,7 +516,8 @@ def cmd_run(a):
          "platform": a.platform, "coordinator_model": a.coordinator_model, "task_id": a.task_id, "executor": "agy",
          "created": datetime.datetime.now().isoformat(timespec="seconds"), "rounds": [], "verified": []}
     save(m)
-    invoke(m, a.brief, a.timeout)
+    with run_lock(rid):
+        invoke(m, a.brief, a.timeout, network_retries=a.network_retries)
 
 
 def cmd_resume(a):
@@ -411,7 +526,7 @@ def cmd_resume(a):
         sys.exit("REFUSED: use claude_cloud.py send for cloud runs; no agy fallback")
     if not os.path.isdir(m["worktree"]):
         sys.exit("worktree is gone; start a new run")
-    invoke(m, a.brief, a.timeout, conversation=m.get("conversation"))
+    invoke(m, a.brief, a.timeout, conversation=m.get("conversation"), network_retries=a.network_retries)
 
 
 def sandboxed(m, root, argv):
@@ -559,11 +674,14 @@ def main():
     r.add_argument("--name")
     r.add_argument("--venv")
     r.add_argument("--timeout", type=int, default=1200)
+    r.add_argument("--network-retries", type=int, choices=(0, 1, 2), default=1,
+                   help="bounded same-session transport recovery; shares --timeout (default: 1)")
     r.set_defaults(fn=cmd_run)
     r = sp.add_parser("resume")
     r.add_argument("run_id")
     r.add_argument("--brief", required=True)
     r.add_argument("--timeout", type=int, default=1200)
+    r.add_argument("--network-retries", type=int, choices=(0, 1, 2), default=1)
     r.set_defaults(fn=cmd_resume)
     r = sp.add_parser("test")
     r.add_argument("run_id")
