@@ -93,11 +93,13 @@ def call_model(provider, prompt, api_key, model, system_prompt=None, max_tokens=
         raise ValueError(f"Unknown external API provider: {provider}")
     headers = {"Content-Type": "application/json"}
     if provider == "gemini":
+        # API key goes in the x-goog-api-key header, not the URL: keys in query
+        # strings end up in proxy and server access logs.
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{urllib.parse.quote(model, safe='')}:streamGenerateContent?alt=sse&key="
-            f"{urllib.parse.quote(api_key, safe='')}"
+            f"{urllib.parse.quote(model, safe='')}:streamGenerateContent?alt=sse"
         )
+        headers["x-goog-api-key"] = api_key
         data = {"contents": [{"parts": [{"text": prompt}]}]}
         if system_prompt:
             data["systemInstruction"] = {"parts": [{"text": system_prompt}]}
