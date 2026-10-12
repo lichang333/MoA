@@ -134,9 +134,12 @@ class RunnerTests(unittest.TestCase):
     def test_mixed_failure_is_excluded_from_aggregation(self):
         os.environ.update(DEEPSEEK_API_KEY="test-ds", OPENAI_API_KEY="test-openai")
         def answer(provider, prompt, api_key, model, system, max_tokens):
-            if system:
+            if system and system.startswith("You are the Aggregator"):
                 payload = json.loads(prompt)
+                self.assertEqual(payload["original_prompt"], "question")
                 self.assertEqual(payload["worker_responses"], {"DeepSeek-Chat": "usable answer"})
+                self.assertIn(runner.COMMON_RULES, system)
+                self.assertNotIn("usable answer", system)
                 return "final answer"
             if provider == "openai":
                 raise ValueError("bad worker response")
@@ -166,6 +169,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(call.call_args.args[0], "glm")
         self.assertEqual(call.call_args.args[3], "glm-5.2")
         self.assertEqual(self.record()["reviewer_result"]["status"], "success")
+
+    def test_independent_workers_receive_only_task_and_shared_rules(self):
+        os.environ.update(DEEPSEEK_API_KEY="synthetic-ds", OPENAI_API_KEY="synthetic-openai")
+        code, stdout, _, call = self.invoke(["--platform", "codex", "--models", "deepseek,openai", "original task"])
+        self.assertEqual(code, 0)
+        self.assertEqual(call.call_count, 2)
+        for item in call.call_args_list:
+            self.assertEqual(item.args[1], "original task")
+            self.assertEqual(item.args[4], runner.WORKER_RULES)
+        self.assertIn("MOA_RAW_JSON_START", stdout)
+        self.assertEqual(self.record()["prompt_version"], runner.PROMPT_VERSION)
+
+    def test_review_is_one_logical_call_with_evidence_rules(self):
+        os.environ["ZHIPUAI_API_KEY"] = "synthetic-key"
+        code, _, _, call = self.invoke(["--review", "task and draft"])
+        self.assertEqual(code, 0)
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args.args[1], "task and draft")
+        self.assertEqual(call.call_args.args[4], runner.REVIEW_RULES)
 
     def test_review_error_returns_nonzero_and_no_success_marker(self):
         os.environ["ZHIPUAI_API_KEY"] = "synthetic-key"
@@ -296,14 +318,25 @@ class RunnerTests(unittest.TestCase):
                     content = b'{"choices":[{"message":{"content":"answer"}}]}'
                 self.network.side_effect = None
                 self.network.return_value = io.BytesIO(content)
-                answer = runner.call_model(provider, "question", "synthetic-key", settings["model"])
+                answer = runner.call_model(provider, "question", "synthetic-key", settings["model"],
+                                           system_prompt=runner.WORKER_RULES)
                 self.assertEqual(answer, "answer")
                 request = self.network.call_args.args[0]
                 payload = json.loads(request.data)
                 if provider == "gemini":
                     self.assertIn(settings["model"], request.full_url)
+                    self.assertEqual(payload["systemInstruction"], {"parts": [{"text": runner.WORKER_RULES}]})
+                    self.assertEqual(payload["contents"], [{"parts": [{"text": "question"}]}])
                 else:
                     self.assertEqual(payload["model"], settings["model"])
+                    if provider == "anthropic":
+                        self.assertEqual(payload["system"], runner.WORKER_RULES)
+                        self.assertEqual(payload["messages"], [{"role": "user", "content": "question"}])
+                    else:
+                        self.assertEqual(payload["messages"], [
+                            {"role": "system", "content": runner.WORKER_RULES},
+                            {"role": "user", "content": "question"},
+                        ])
 
 
 if __name__ == "__main__":
