@@ -201,7 +201,7 @@ def run_lock(rid):
 def coordination(m):
     """Host-recorded provenance; old records predate the cloud transport."""
     executor = m.get("executor", "agy")
-    if executor not in ("agy", "claude-cloud"):
+    if executor not in ("agy", "claude-cloud", "claude-local"):
         raise ValueError(f"unknown executor: {executor}")
     return {"platform": m.get("platform", "claude"),
             "coordinator_model": m.get("coordinator_model", "current"),
@@ -538,7 +538,7 @@ def cmd_run(a):
 def cmd_resume(a):
     m = load(a.run_id)
     if m["executor"] != "agy":
-        sys.exit("REFUSED: use claude_cloud.py send for cloud runs; no agy fallback")
+        sys.exit("REFUSED: use the original executor's resume/send command; no agy fallback")
     if not os.path.isdir(m["worktree"]):
         sys.exit("worktree is gone; start a new run")
     invoke(m, a.brief, a.timeout, conversation=m.get("conversation"), network_retries=a.network_retries)
@@ -559,7 +559,7 @@ def sandboxed(m, root, argv):
 
 def cmd_test(a):
     m = load(a.run_id)
-    if m["executor"] != "agy":
+    if m["executor"] not in ("agy", "claude-local"):
         sys.exit("REFUSED: cloud results must use verify, not the launch tree")
     wt = m["worktree"]
     git(wt, "add", "-A", "--", ".", *DIFF_EXCLUDES)
@@ -635,7 +635,7 @@ def cmd_record(a):
         u = r.get("usage") or {}
         tok["input"] += u.get("input_tokens", 0)
         tok["output"] += u.get("output_tokens", 0)
-        tok["cache_read"] += u.get("cache_read_tokens", 0)
+        tok["cache_read"] += u.get("cache_read_input_tokens", u.get("cache_read_tokens", 0))
     final = (m.get("applied") or {}).get("sha256") or (m["rounds"][-1].get("sha256") if m["rounds"] else None)
     entry = {"date": m["created"][:10], "run": m["id"], **coordination(m), "repo": os.path.basename(m["repo"]),
              "level": a.level, "model": m["model"], "rounds": len(m["rounds"]),
@@ -649,6 +649,10 @@ def cmd_record(a):
         entry.pop("gemini_tokens")
         entry.update(usage=None, cost_usd=None, session_id=m.get("session_id"),
                      funding_source=(m.get("funding") or {}).get("source"))
+    elif m["executor"] == "claude-local":
+        entry["usage"] = entry.pop("gemini_tokens")
+        entry.update(requested_model=m.get("requested_model"), observed_models=m.get("observed_models", []),
+                     funding_source="subscription")
     with open(LEDGER, "a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     m["outcome"] = entry

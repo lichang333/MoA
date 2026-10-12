@@ -1,10 +1,11 @@
 # Shared delegated coding workflow
 
 The coordinator owns the brief, review, verification and integration. External
-executors are Antigravity (`agy`) and the explicit [Claude cloud bridge](cloud-workflow.md).
-Both start from a commit and exclude the user's uncommitted changes. Prefer available
+executors are Antigravity (`agy`), [native Claude Code](claude-local-workflow.md)
+(`claude-local`) and the explicit [Claude cloud bridge](cloud-workflow.md).
+All start from a commit and exclude the user's uncommitted changes. Prefer available
 included subscription allowance; choose cloud for suitable GitHub work within the
-user's funding preference. agy retains its local guard and sandbox. Neither executor's model selection proves remaining allowance.
+user's funding preference. agy retains its local guard and sandbox. An executor's model selection proves remaining allowance.
 
 ## Execution boundaries
 
@@ -20,7 +21,7 @@ user's funding preference. agy retains its local guard and sandbox. Neither exec
   and verification of the new patch.
 - Native Codex/Claude subagents do not inherit agy hooks or this sandbox. Within
   this workflow use them for read-only planning/review; delegated implementation
-  uses agy or the documented cloud route. The coordinator can implement small
+  uses agy, the native Claude broker or the documented cloud route. The coordinator can implement small
   changes and execution-boundary changes directly.
 - Direct coordinator L0 edits require the repository's applicable checks and real
   acceptance evidence, without inventing a worker run or patch SHA. Worker-derived
@@ -65,9 +66,10 @@ assuming it offers the same versions as agy. Checking the picker requires no
 model prompt and should not change the user's default. Prefer channel-specific
 aliases over freezing today's displayed version into the skill. A newer native
 model does not make that model available through agy or establish cloud eligibility.
-Native Claude Code local delegation is not implemented by this workflow; current
-execution adapters remain agy and claude-cloud. Do not describe model discovery
-as a working local adapter or bypass the guarded worker to use a native model.
+Native Claude Code local delegation uses `claude_local.py` and its
+[broker workflow](claude-local-workflow.md). Check its independent subscription
+allowance, prepare the isolated run and observe funding before execution. Model
+discovery alone is not a completed integration or authorization for extra usage.
 
 An explicit cloud preference can route a small
 or L1/L2 GitHub task through the cloud workflow instead; size alone is not a reason
@@ -156,8 +158,8 @@ Record the decision, evidence and reason in an ignored run artifact such as
 `quota-handoff-<attempt>.md`, and tell the user the outcome before dispatching.
 Existing authorization covers a suitable successor using available included or
 already-authorized quota; ask only if the choice needs new spending or access.
-Models in an exhausted shared group, unimplemented adapters (currently native
-Claude Code local execution), and unobserved Claude cloud funding are not eligible.
+Models in an exhausted shared group, unimplemented adapters, and unobserved
+native Claude or Claude cloud funding are not eligible.
 Never enable credit overages or consume prepaid API credit merely to keep going;
 apply the funding priority and authorization rule above.
 
@@ -295,7 +297,7 @@ routing based on observed performance; do not assume a model always wins.
 
 Include a short **模型调用说明** (or the user's language) in the final response:
 coordinator, any planning/review agents actually invoked, and each execution
-model with its channel (`agy` or `claude-cloud`), and API advisors as `api`. Include failed/abandoned attempts
+model with its channel (`agy`, `claude-local` or `claude-cloud`), and API advisors as `api`. Include failed/abandoned attempts
 and model switches; mention network continuations when they occurred. For L0
 handled entirely by the coordinator, say no external coding model was called.
 If independent review was skipped or fell back, give the actual reason; L0 alone
@@ -303,8 +305,8 @@ is not a reason. Distinguish a same-model pass from confirmed cross-model review
 
 Use dispatch records, run metadata and observed cloud session models as evidence.
 For agy, label `model` as the CLI-selected model; do not claim independent backend
-verification. For cloud, distinguish `requested_model` from the observed session
-model. If the coordinator/subagent model is unavailable, write “当前会话（具体模型未暴露）”
+verification. For native Claude and cloud, distinguish `requested_model` from the observed
+session model. If the coordinator/subagent model is unavailable, write “当前会话（具体模型未暴露）”
 or “继承主会话（具体模型未暴露）”; do not infer it from role defaults. Mention funding
 only when observed, and distinguish Google's agy allowance from Claude's cloud
 credits/subscription. Do not infer charges or remaining balance from token counts.

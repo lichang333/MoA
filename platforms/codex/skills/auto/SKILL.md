@@ -1,6 +1,6 @@
 ---
 name: auto
-description: Delegate coding through Antigravity or Claude cloud when the user invokes /auto or requests an external coding worker. Codex coordinates planning, review and sandboxed integration. Excludes Q&A synthesis and delegated production, SSH or deployment work.
+description: Delegate coding through Antigravity, native Claude Code CLI or Claude cloud when the user invokes /auto or requests an external coding worker. Codex coordinates planning, review and sandboxed integration. Excludes Q&A synthesis and delegated production, SSH or deployment work.
 ---
 
 # Delegated coding in Codex
@@ -35,6 +35,11 @@ Unknown or exhausted funding does not authorize API fallback. For local agy
 execution, choose a default from `agy_routes` or a suitable Claude/GPT-OSS option
 from `agy_alternatives`, following the shared workflow's availability and funding
 checks. Do not substitute a native Codex/OpenAI API model ID into the agy CLI.
+
+For native Claude Code subscription execution, use the
+[native CLI workflow](claude-local-workflow.md) and `claude_local.py`. The trusted
+MCP broker supplies file tools and sandboxed tests; native CLI tools remain off.
+Check the actual model picker and fresh included allowance before dispatch.
 
 Prefer available included subscription allowance, following `auto_funding` in the
 shared profile. GLM, DeepSeek and MiniMax are prepaid `api_advisors` for planning

@@ -1,6 +1,6 @@
 ---
 name: auto
-description: Delegate coding through Antigravity or Claude cloud when the user invokes /auto or requests an external coding worker. Claude triages, briefs, reviews, verifies and integrates. Excludes Q&A synthesis and delegated production, SSH or deployment work.
+description: Delegate coding through Antigravity, native Claude Code CLI or Claude cloud when the user invokes /auto or requests an external coding worker. Claude triages, briefs, reviews, verifies and integrates. Excludes Q&A synthesis and delegated production, SSH or deployment work.
 ---
 
 # Delegated coding in Claude Code
@@ -18,6 +18,11 @@ for the official CLI bridge and import/verification gates. Check actual allowanc
 unknown funding is not permission to use an API. Otherwise use the existing agy
 route when its included allowance is available. A Claude cloud worker should
 complete its bounded brief, not recursively dispatch new cloud workers.
+
+For native Claude Code subscription execution, use the
+[native CLI workflow](claude-local-workflow.md) and `claude_local.py`. The trusted
+MCP broker supplies file tools and sandboxed tests; native CLI tools remain off.
+Check the actual model picker and fresh included allowance before dispatch.
 
 Prefer available included subscription allowance, following `auto_funding` in the
 shared profile. GLM, DeepSeek and MiniMax are prepaid `api_advisors` for planning

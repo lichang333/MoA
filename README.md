@@ -7,7 +7,7 @@ and the coordinator reviews and integrates the result.
 | Workflow | Purpose | Execution |
 |---|---|---|
 | `/moa` | Multi-model Q&A and analysis | Native analysis or external API answers; current-session synthesis |
-| `/auto` | Delegated coding | agy workers or explicit Claude cloud sessions; local sandbox verification and reviewed-patch apply |
+| `/auto` | Delegated coding | agy, native Claude Code CLI or explicit Claude cloud sessions; local sandbox verification and reviewed-patch apply |
 
 Codex uses the current session for dispatch and integration, with Astra for complex
 planning or important review. Claude keeps its own tools and routes. Provider
@@ -28,7 +28,7 @@ platforms/claude/skills/        Claude moa and auto skill entrypoints
 shared/                        common project and workflow rules
 config/                        provider defaults and platform routing profiles
 skills/moa/                    shared API runner and offline tests
-skills/auto/                   agy executor, Claude cloud bridge, guard, sandbox and tests
+skills/auto/                   agy/native Claude executors, cloud bridge, guard, sandbox and tests
 tests/                         installer tests
 ```
 
@@ -87,8 +87,8 @@ establish their current live API availability.
 
 ## Coding execution and records
 
-`--platform codex` identifies the coordinator. Executors are **agy** and the
-explicit **claude-cloud** bridge, recorded separately.
+`--platform codex` identifies the coordinator. Executors are **agy**, **claude-local** and the explicit **claude-cloud** bridge,
+recorded separately.
 Native Codex/Claude subagents help with read-only planning and review; they do not
 inherit agy hooks or sandboxing. Delegated implementation follows the
 [shared coding workflow](shared/auto-workflow.md).
@@ -109,6 +109,15 @@ agy can continue the same session once after an explicitly retryable network
 failure. `--network-retries 0` disables recovery (maximum: two). Attempts preserve
 partial patches and share the original time budget; quota/authentication errors
 or safety/review flags stop instead. See the shared workflow for the exact gates.
+
+## Native Claude Code CLI
+
+The [native CLI workflow](shared/claude-local-workflow.md) uses first-party
+Claude Pro/Max included allowance. `claude_local.py` provides prepare,
+observe-funding, run and feedback resume. Native tools are disabled; a trusted
+MCP broker supplies scoped file operations and sandboxed tests. Partial patches,
+actual reported model IDs and usage are retained; full verification and reviewed
+SHA apply use the shared worker. No automatic model fallback or paid API switch.
 
 ## Claude cloud credits and subscription execution
 
@@ -141,8 +150,7 @@ does not pretend to know remote completion, remaining quota or actual cost.
 Requested and observed model families are separate. Cloud execution does not
 inherit agy's guard, and the remote GitHub branch can advance after launch
 preflight; the cloud brief must check the expected base before starting.
-Automatic quota polling, background scheduling and Claude-local delegation are
-not implemented.
+Automatic quota polling and background scheduling are not implemented.
 
 ## Offline verification
 
@@ -151,6 +159,8 @@ python3 skills/moa/test_runner.py
 python3 skills/auto/test_guard.py
 python3 skills/auto/test_worker.py
 python3 skills/auto/test_cloud.py
+python3 skills/auto/test_local.py
+python3 skills/auto/test_recovery.py
 python3 tests/test_install.py
 python3 tests/test_platforms.py
 ```
