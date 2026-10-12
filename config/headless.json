@@ -11,6 +11,24 @@
     "l2": "gemini-3.1-pro-high",
     "l3": ["gemini-3.1-pro-high", "claude-opus-4-6-thinking"]
   },
+  "agy_alternatives": {
+    "l1": ["claude-sonnet-4-6", "gpt-oss-120b-medium"],
+    "l2": ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"]
+  },
+  "auto_funding": {
+    "priority": ["included_subscription", "authorized_cloud_credit", "authorized_prepaid_api"],
+    "prepaid_requires_explicit_authorization": true
+  },
+  "api_advisors": {
+    "providers": ["glm", "deepseek", "minimax"],
+    "roles": ["planning", "read_only_review"],
+    "funding": "prepaid_api"
+  },
+  "quota_handoff": {
+    "decider_candidates": ["gpt-6-astra", "fable", "opus5.5", "muse"],
+    "decision_required": true,
+    "on_unavailable": "retain_and_report"
+  },
   "providers": {
     "openai": {"model": "gpt-4o", "display_name": "GPT-4o"},
     "anthropic": {"model": "claude-3-5-sonnet-20240620", "display_name": "Claude-3.5-Sonnet"},

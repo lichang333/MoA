@@ -8,15 +8,19 @@ validation in the coordinating session. Cloud sessions use Linux.
 
 ## Funding and task choice
 
-For the user's goal of minimizing new cash spending, prefer unexpired cloud
-promotional credits for suitable tasks, then available included subscriptions,
-then explicitly authorized existing API balances. Do not invoke multiple APIs
-just because their keys exist. Different channels use different pools:
+Follow the user's current subscription-first preference and `auto_funding`: prefer
+available included subscription allowance for suitable tasks, then eligible
+authorized cloud credits, then explicitly authorized existing prepaid API balances.
+An explicit task-specific funding choice takes precedence. Do not invoke multiple
+APIs just because their keys exist. GLM, DeepSeek and MiniMax are prepaid API
+candidates for analysis/review, not coding executors in this bridge. Different channels use different pools:
 
 - Claude cloud credits apply to ordinary Cloud sessions; Projects, Routines,
   Remote Control, Chat and Cowork are excluded by the current promotion.
-- Claude local sessions use the Claude subscription. agy's Claude models use
-  Google's allowance. Anthropic API keys use separate API billing.
+- Claude local sessions use the Claude subscription. Gemini, Claude and GPT-OSS
+  models exposed by agy use the Antigravity channel's allowance, not Claude cloud
+  credits or native Claude/Codex subscriptions. Whether those agy models share
+  a quota pool must be observed, not assumed. API keys use separate API billing.
 - No bridge command enables extra usage, purchases credit, or falls back to an API.
   Keep extra usage off and use Sonnet/Opus. Pro Fable requires paid usage enabled.
 
