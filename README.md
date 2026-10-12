@@ -85,6 +85,21 @@ and existing output markers remain
 available. External provider model defaults are preserved; offline tests do not
 establish their current live API availability.
 
+## Evidence-based analysis
+
+The [shared MoA workflow](shared/moa-workflow.md#evidence-based-collaboration)
+now applies common evidence rules to independent workers, the optional single
+reviewer and the aggregator. Reviewers may find no substantive issue; synthesis
+preserves unresolved disagreements and does not count repeated citations as
+independent evidence. No tools, live source checking or JSON evidence validation
+are implied by a model response.
+
+The [four-stage experiment proposal](shared/evidence-review-proposal.md)
+describes independent answers → cross-review → revision → synthesis. It is not
+an implemented mode and does not increase default calls. Cross-review scheduling,
+answer-version validation, a trusted evidence registry, global budgets and
+controlled evaluation remain future work.
+
 ## Coding execution and records
 
 `--platform codex` identifies the coordinator. Executors are **agy**, **claude-local** and the explicit **claude-cloud** bridge,

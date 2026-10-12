@@ -63,3 +63,35 @@ gitignored artifacts and can contain model response text. A nonzero exit means
 the requested operation failed; partial failures must remain visible even when
 useful answers are available. `--show-config` and `--dry-run` inspect routing
 without loading credentials or making requests.
+
+## Evidence-based collaboration
+
+The first round receives only the original task and common evidence, in separate
+contexts. Do not include another candidate's answer or a majority hint in that
+round. Native coordinators must enforce this isolation themselves; the API
+runner cannot detect candidate material embedded by its caller.
+
+- Separate facts, assumptions, inferences and recommendations. A proposed test
+  remains unverified until it has actually run and its result is recorded.
+- Review specific claims, constraints, citations and failure conditions. Accept
+  "no substantive issue found"; do not require a quota of objections or agreement.
+- Respond to important review findings with accept, partly accept, reject or
+  undetermined, a concise checkable reason, and a complete usable revision.
+- Repeated citations to one source remain one source. Neither majority agreement,
+  model identity nor self-reported confidence establishes correctness.
+- Preserve material disagreements and evidence gaps. Prefer the smallest
+  verification that could change the conclusion over another discussion round.
+- Exchange conclusions, evidence summaries, tests and brief revision reasons;
+  do not solicit private chain-of-thought.
+
+API workers have no tools or live browsing here. Model-written "checked" labels
+are claims, not verification: the coordinator must match them to supplied source
+checks or real tool logs. Prompts now apply these rules to workers, the single
+reviewer and the aggregator; they do not implement a trusted evidence registry.
+
+The current runner performs independent collection and optional aggregation.
+`--review` makes one logical reviewer call on the caller-supplied task/draft;
+it does not fetch previous answers, allocate cross-reviews or revise candidates.
+Raw text markers and default call counts are unchanged. See the
+[optional four-stage experiment](evidence-review-proposal.md) for capabilities
+that require additional orchestration, validation and explicit budgets.

@@ -5,7 +5,7 @@ executors are Antigravity (`agy`), [native Claude Code](claude-local-workflow.md
 (`claude-local`) and the explicit [Claude cloud bridge](cloud-workflow.md).
 All start from a commit and exclude the user's uncommitted changes. Prefer available
 included subscription allowance; choose cloud for suitable GitHub work within the
-user's funding preference. agy retains its local guard and sandbox. An executor's model selection proves remaining allowance.
+user's funding preference. agy retains its local guard and sandbox. An executor's model selection does not prove remaining allowance.
 
 ## Execution boundaries
 
