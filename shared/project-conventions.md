@@ -14,6 +14,7 @@
   for transport recovery. Runner changes require
   `python3 skills/moa/test_runner.py`; installer changes require
   `python3 tests/test_install.py`. These tests use local fixtures and no live models.
+- Native Claude CLI/broker changes also require `python3 skills/auto/test_local.py`.
 - Cloud transport changes also require `python3 skills/auto/test_cloud.py`.
   Imported cloud code must use the same local sandbox, full verification and
   reviewed-SHA apply gates. Observed credit/plan data is not a live spending cap.

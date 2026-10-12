@@ -10,7 +10,8 @@ For multi-agent work, the current session owns dispatch and integration. Use Ast
 for complex plans or consequential review when its configured model is available;
 keep ordinary tasks with the current coordinator. Consult `config/codex.json` for
 role choices. Read-only investigations can run in parallel. Delegated `/auto` code
-execution uses agy or the Claude cloud bridge. Cloud results return through local
+execution uses agy, the native Claude broker in `shared/claude-local-workflow.md`,
+or the Claude cloud bridge. Cloud results return through local
 sandbox verification and reviewed-patch apply; cloud execution and native Codex
 subagents do not inherit agy's guard. See `shared/cloud-workflow.md` for cloud
 funding and transport limits.

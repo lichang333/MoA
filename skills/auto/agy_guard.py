@@ -103,7 +103,8 @@ def check_read(path, ctx):
     p = real(path)
     if SECRET_RE.search(p):
         raise Deny(f"reading secret-looking file {path} is not allowed")
-    if within(p, ctx["root"]) or within(p, AGY_BUILTIN) or (ctx["art"] and within(p, ctx["art"])):
+    if within(p, ctx["root"]) or (ctx.get("allow_agy_paths", True) and (
+            within(p, AGY_BUILTIN) or (ctx["art"] and within(p, ctx["art"])))):
         return
     raise Deny(f"read outside the worktree: {path} (worktree is {ctx['root']})")
 

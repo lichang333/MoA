@@ -13,7 +13,8 @@ class PlatformPackages(unittest.TestCase):
         files = {
             "moa": ("moa_runner.py", "test_runner.py"),
             "auto": ("agy_worker.py", "agy_guard.py", "run_sandboxed.sh",
-                     "sandbox.sb", "test_guard.py", "test_worker.py", "test_recovery.py", "claude_cloud.py", "test_cloud.py"),
+                     "sandbox.sb", "test_guard.py", "test_worker.py", "test_recovery.py", "claude_cloud.py", "test_cloud.py",
+                     "claude_local.py", "claude_broker.py", "test_local.py"),
         }
         for platform in ("codex", "claude"):
             for skill, scripts in files.items():
@@ -28,6 +29,7 @@ class PlatformPackages(unittest.TestCase):
                     })
                     if skill == "auto":
                         expected["cloud-workflow.md"] = ROOT / "shared/cloud-workflow.md"
+                        expected["claude-local-workflow.md"] = ROOT / "shared/claude-local-workflow.md"
                     for name, source in expected.items():
                         self.assertTrue((entry / name).is_symlink(), name)
                         self.assertTrue((entry / name).is_file(), name)
@@ -49,6 +51,10 @@ class PlatformPackages(unittest.TestCase):
                 self.assertTrue(config["agy_routes"]["l2"])
                 subprocess.run(
                     [sys.executable, str(entry / "auto/agy_worker.py"), "run", "--help"],
+                    text=True, capture_output=True, check=True,
+                )
+                subprocess.run(
+                    [sys.executable, str(entry / "auto/claude_local.py"), "prepare", "--help"],
                     text=True, capture_output=True, check=True,
                 )
                 subprocess.run(

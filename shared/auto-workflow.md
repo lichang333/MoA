@@ -1,10 +1,11 @@
 # Shared delegated coding workflow
 
 The coordinator owns the brief, review, verification and integration. External
-executors are Antigravity (`agy`) and the explicit [Claude cloud bridge](cloud-workflow.md).
-Both start from a commit and exclude the user's uncommitted changes. Choose cloud
-for suitable GitHub work with observed eligible funding; agy retains its local
-guard and sandbox. Neither executor's model selection proves remaining allowance.
+executors are Antigravity (`agy`), [native Claude Code](claude-local-workflow.md)
+(`claude-local`) and the explicit [Claude cloud bridge](cloud-workflow.md).
+All start from a commit and exclude the user's uncommitted changes. Prefer available
+included subscription allowance; choose cloud for suitable GitHub work within the
+user's funding preference. agy retains its local guard and sandbox. An executor's model selection proves remaining allowance.
 
 ## Execution boundaries
 
@@ -20,7 +21,7 @@ guard and sandbox. Neither executor's model selection proves remaining allowance
   and verification of the new patch.
 - Native Codex/Claude subagents do not inherit agy hooks or this sandbox. Within
   this workflow use them for read-only planning/review; delegated implementation
-  uses agy or the documented cloud route. The coordinator can implement small
+  uses agy, the native Claude broker or the documented cloud route. The coordinator can implement small
   changes and execution-boundary changes directly.
 - Direct coordinator L0 edits require the repository's applicable checks and real
   acceptance evidence, without inventing a worker run or patch SHA. Worker-derived
@@ -36,7 +37,41 @@ guard and sandbox. Neither executor's model selection proves remaining allowance
 | L2 | Multi-file feature or bug with clear acceptance criteria | Profile's `agy_routes.l2` |
 | L3 | Architecture, ambiguity or consequential logic | Plan first, then split into L1/L2; independent review as needed |
 
-These are the local agy defaults. An explicit cloud preference can route a small
+These are the local agy defaults, not a Gemini-only policy. `agy_alternatives`
+in the shared profile also supplies Claude and GPT-OSS candidates. Choose one
+executor for the bounded brief using task complexity, the user's model/funding
+preferences and available allowance; always pass its explicit `--model` ID.
+Opus is an option for complex multi-file logic, Sonnet for general implementation,
+and GPT-OSS for bounded work whose acceptance can be checked locally. These are
+routing heuristics, not guarantees of quality or permission to launch all models.
+
+Check `agy models` when choosing a model or changing routes. A listed model proves
+availability, not remaining quota. Use the user's current allowance statement or
+an actual account observation without inventing a balance, independent pools or
+reset time; do not save a temporary quota claim as a permanent fact. Claude and
+GPT-OSS through agy use the Antigravity channel, not Claude cloud credits, native
+Claude/Codex subscriptions or the standalone provider API keys. GPT-OSS is not a
+native Codex model. On a quota/auth failure, stop that attempt and inspect captured
+work; quota failures require the senior-model handoff decision below before a replacement
+executor or coordinator implementation takes over. Never silently rerun partially
+completed work or fall back to separately billed APIs without applicable explicit authorization.
+When the Models & Usage panel conflicts with a CLI quota error, refresh the panel
+before concluding either is wrong. Check both weekly and five-hour windows and
+the panel's quota-group labels: a model in the same exhausted group is not an
+eligible quota fallback. Keep credit overages off unless the user authorizes them.
+
+When considering native Claude Code, inspect `claude --version` and its actual
+`/model` picker (including disabled and extra-credit-only entries) rather than
+assuming it offers the same versions as agy. Checking the picker requires no
+model prompt and should not change the user's default. Prefer channel-specific
+aliases over freezing today's displayed version into the skill. A newer native
+model does not make that model available through agy or establish cloud eligibility.
+Native Claude Code local delegation uses `claude_local.py` and its
+[broker workflow](claude-local-workflow.md). Check its independent subscription
+allowance, prepare the isolated run and observe funding before execution. Model
+discovery alone is not a completed integration or authorization for extra usage.
+
+An explicit cloud preference can route a small
 or L1/L2 GitHub task through the cloud workflow instead; size alone is not a reason
 to ignore that preference. Production/credential work and changes to the execution
 guard or sandbox still stay with the coordinator.
@@ -47,7 +82,7 @@ Announce the execution level/model and the review route (or brief skip reason).
 User model choices take priority when the executor supports them.
 Read `routing.json` and its shared defaults, `headless.json`
 (installed next to the skill; source is `config/headless.json`),
-for `agy_routes`; `agy models` can confirm external
+for `agy_routes` and `agy_alternatives`; `agy models` can confirm external
 executor availability. Do not substitute an OpenAI model ID into the agy CLI.
 
 Write a brief containing `GOAL`, `CONTEXT` (files/functions), `REQUIREMENTS`,
@@ -55,6 +90,92 @@ Write a brief containing `GOAL`, `CONTEXT` (files/functions), `REQUIREMENTS`,
 distinct briefs and run IDs. Keep shared-file edits sequential and reverify each
 patch after integration changes HEAD. For prod-bound code such as migrations,
 deployment scripts and runtime configuration, prefer coordinator implementation.
+
+### Funding priority and API advisors
+
+Follow `auto_funding`: use suitable, available **included subscription allowance
+first**, then eligible authorized cloud credit, then explicitly authorized prepaid
+API balance. A channel's real billing mode matters more than its model name;
+extra-credit-only subscription entries count as paid usage. Preserve an explicit
+user choice for a particular task. This is coordinator routing policy, not an
+automatic billing control implemented in the worker.
+
+`api_advisors.providers` includes GLM, DeepSeek and MiniMax. The user identifies
+these as prepaid channels. Remember them as candidates, but their keys, balances
+or inclusion in the list do not by themselves authorize consuming credit. Before
+a paid call, check for applicable explicit spending authorization in this session;
+if absent, present the concrete provider/model, purpose and bounded call scope for
+approval. Existing authorization need not be requested again. Do not top up,
+enable overages or call models just to probe quota.
+
+These providers are implemented by the shared `skills/moa/moa_runner.py` as text
+analysis, so `/auto` may use them for planning or read-only review under that
+funding policy. They are not guarded coding executors and cannot replace the
+specified quota decision makers. Resolve model IDs from `providers` in the active
+profile instead of copying versions into a prompt. Use an explicit single provider
+and raw mode to avoid default fan-out or a second paid aggregation call:
+
+```bash
+python3 '<installed-moa-skill>/moa_runner.py' --platform codex \
+  --models '<glm|deepseek|minimax>' --raw -- '<sanitized bounded review brief>'
+```
+
+Use the calling platform (`codex` or `claude`). Provide only the necessary sanitized
+brief/diff; no credentials, live-service access or tool execution. `--review` selects
+the separate configured `reviewer` (currently GLM); `--models` does not override it.
+`--show-config` / `--dry-run` reads routing without credentials or model calls.
+Record real API calls and failures as channel `api` in the model usage note.
+Actual code execution through these APIs needs a separately implemented adapter
+with the same isolation, patch provenance, full verification and apply gates.
+
+### Quota handoff decision
+
+When an executor reports exhausted quota, preserve its partial patch, run ID,
+base commit, error and verification state. Stop that execution attempt; a quota
+error is not a retryable network interruption. Refresh the relevant usage panel
+when available, checking both limit windows, quota groups and credit-overage state.
+Do not test capacity by sending disposable prompts to other models.
+
+Choose an available decision maker from `quota_handoff.decider_candidates`:
+Astra, Fable, Opus 5.5 or Muse. These are eligible decision-maker identities, not
+interchangeable CLI model IDs or proof of installed adapters. Resolve each name
+through its actual host/model picker, check available authorized quota, and do
+not invent an endpoint or model ID for Muse. If the current coordinator's actual
+identity is confirmed as an eligible candidate, it may decide in this session;
+otherwise use a supported native, read-only invocation with fresh bounded context.
+A role default or unknown inherited model does not establish decision-maker identity.
+
+Give the decision maker the task and remaining acceptance criteria, failed model/channel and
+error, captured patch summary/SHA and known review findings, available executor
+capabilities, freshly observed quota data (or the user's current statement, with
+its limits), and the user's funding preferences. The decision maker chooses one of:
+
+- a specific eligible successor model **and channel**, with a bounded handoff brief;
+- coordinator takeover for appropriate repair or integration work;
+- retain the work and wait for quota or missing information.
+
+Record the decision, evidence and reason in an ignored run artifact such as
+`quota-handoff-<attempt>.md`, and tell the user the outcome before dispatching.
+Existing authorization covers a suitable successor using available included or
+already-authorized quota; ask only if the choice needs new spending or access.
+Models in an exhausted shared group, unimplemented adapters, and unobserved
+native Claude or Claude cloud funding are not eligible.
+Never enable credit overages or consume prepaid API credit merely to keep going;
+apply the funding priority and authorization rule above.
+
+If a candidate is unavailable, another available candidate on this list may decide.
+If none is available or no candidate returns a decision, keep the artifacts and
+report the missing decision; do not substitute an unlisted model or launch a
+successor without the user's waiver. Read-only review and preparation may continue.
+This quota rule takes precedence over ordinary review fallback.
+
+A successor must inspect existing work and receive only the remaining scope.
+Use the supported guarded runner/bridge; do not rewrite model identity in old run
+metadata or bypass the guard to switch a CLI. Preserve each attempt's provenance.
+The complete resulting patch still needs whole-patch review, sandboxed full
+verification and the existing SHA/HEAD apply gates, including coordinator repairs.
+This is a coordinator workflow, not a background quota monitor or automatic CLI
+failover; scheduling a later retry remains a separate user request.
 
 ### Independent review routing
 
@@ -176,7 +297,7 @@ routing based on observed performance; do not assume a model always wins.
 
 Include a short **模型调用说明** (or the user's language) in the final response:
 coordinator, any planning/review agents actually invoked, and each execution
-model with its channel (`agy` or `claude-cloud`). Include failed/abandoned attempts
+model with its channel (`agy`, `claude-local` or `claude-cloud`), and API advisors as `api`. Include failed/abandoned attempts
 and model switches; mention network continuations when they occurred. For L0
 handled entirely by the coordinator, say no external coding model was called.
 If independent review was skipped or fell back, give the actual reason; L0 alone
@@ -184,8 +305,8 @@ is not a reason. Distinguish a same-model pass from confirmed cross-model review
 
 Use dispatch records, run metadata and observed cloud session models as evidence.
 For agy, label `model` as the CLI-selected model; do not claim independent backend
-verification. For cloud, distinguish `requested_model` from the observed session
-model. If the coordinator/subagent model is unavailable, write “当前会话（具体模型未暴露）”
+verification. For native Claude and cloud, distinguish `requested_model` from the observed
+session model. If the coordinator/subagent model is unavailable, write “当前会话（具体模型未暴露）”
 or “继承主会话（具体模型未暴露）”; do not infer it from role defaults. Mention funding
 only when observed, and distinguish Google's agy allowance from Claude's cloud
 credits/subscription. Do not infer charges or remaining balance from token counts.
@@ -195,8 +316,10 @@ Example shape (replace fields with evidence, omit unused roles):
 
 Configured routes are options, not a list of models called on every `/auto` run.
 Read the current profile rather than copying model versions into this note.
-The shared `providers`/`worker_defaults` API list belongs to `/moa`; it does not
-mean `/auto` invoked those providers.
+The shared `providers`/`worker_defaults` configure the MoA API runner. `/auto` can
+select an authorized `api_advisors` provider for text analysis; configuration alone
+does not mean it was called or make it a coding executor.
 
-If agy login/quota or sandbox setup fails, report that condition or let the
-coordinator take over. Do not fall back to a different unsandboxed worker CLI.
+If agy login or sandbox setup fails, report that condition or let the coordinator
+take over. Quota exhaustion follows the required senior-model handoff decision above.
+Do not fall back to a different unsandboxed worker CLI.
