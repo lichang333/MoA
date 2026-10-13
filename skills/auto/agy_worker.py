@@ -84,6 +84,10 @@ NODE_NOTE = """- Project dependencies are installed read-only in ./node_modules.
   `node node_modules/<pkg>/<script>`, e.g. `node node_modules/vitest/vitest.mjs run` or
   `node node_modules/typescript/bin/tsc --noEmit`. npm, npx and package installs are unavailable.
 """
+# agy-authored failure text (its JSON `error` / AGY_ERROR lines, never model prose) worth routing on.
+QUOTA_RE = re.compile(r"individual quota reached|quota (?:reached|exceeded|exhausted)|resource.?exhausted", re.I)
+CAPACITY_RE = re.compile(r"no capacity available|code 503|high traffic", re.I)
+RESETS_RE = re.compile(r"resets in ((?:\d+h)?(?:\d+m)?(?:\d+s)?)", re.I)
 # agy reports a print timeout on stderr but may still print status SUCCESS with partial output.
 PRINT_TIMEOUT_RE = re.compile(r"print timeout after \S+ with turn in progress|returning partial output", re.I)
 POLL_SECONDS = 2.0
@@ -524,6 +528,30 @@ def transient_network_error(stderr, code, status):
     return {k: e[k] for k in ("code_kind", "error_code", "status", "retryable", "short_error")}
 
 
+def agy_failure(resp, stderr, now=None):
+    """Classify an agy failure for routing: `quota_exhausted` (with the reported reset time) or
+    `capacity_unavailable` (server-side, not quota). None for anything else."""
+    texts = [resp.get("error")] if isinstance(resp.get("error"), str) else []
+    for line in stderr.splitlines():
+        if line.startswith("AGY_ERROR: "):
+            with contextlib.suppress(ValueError, AttributeError):
+                texts.append(json.loads(line[len("AGY_ERROR: "):]).get("short_error") or "")
+        elif line.startswith("error: "):
+            texts.append(line[len("error: "):])
+    text = " ".join(t for t in texts if isinstance(t, str))
+    if QUOTA_RE.search(text):
+        out = {"kind": "quota_exhausted", "detail": text[:300]}
+        match = RESETS_RE.search(text)
+        if match and match.group(1):
+            secs = sum(int(n) * {"h": 3600, "m": 60, "s": 1}[u] for n, u in re.findall(r"(\d+)([hms])", match.group(1)))
+            at = (now or datetime.datetime.now().astimezone()) + datetime.timedelta(seconds=secs)
+            out.update(resets_in_seconds=secs, resets_at=at.isoformat(timespec="minutes"))
+        return out
+    if CAPACITY_RE.search(text):
+        return {"kind": "capacity_unavailable", "detail": text[:300]}
+    return None
+
+
 def valid_conversation(value):
     return isinstance(value, str) and re.fullmatch(
         r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value) is not None
@@ -640,6 +668,7 @@ def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None, sta
     if valid_conversation(resp.get("conversation_id")) and (not conversation or resp["conversation_id"] == conversation):
         m["conversation"] = resp["conversation_id"]
     transport = transient_network_error(err_s, code, status)
+    failure = agy_failure(resp, err_s) if status not in ("SUCCESS", "stalled", "timeout", "interrupted") else None
     wall = round(time.time() - t0, 1)
     m["rounds"].append({"round": rnd, "status": status, "seconds": wall, "active_seconds": active,
                         "usage": resp.get("usage") if isinstance(resp.get("usage"), dict) else {},
@@ -647,7 +676,8 @@ def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None, sta
                         "swept_pids": swept, "exit": code, "transport_error": transport,
                         "response_conversation": resp.get("conversation_id"), "timeout_seconds": timeout,
                         "stall_timeout_seconds": stall_timeout, "tool_events": events,
-                        "guard_conversation": progress.conversation, "incomplete": incomplete})
+                        "guard_conversation": progress.conversation, "incomplete": incomplete,
+                        "failure": failure})
     save(m)   # the round is on record even if capture fails below
     ev = guard_events(m["id"])
     m["guard"] = {"allowed": sum(e.get("decision") == "allow" for e in ev),
@@ -671,6 +701,10 @@ def invoke_attempt(m, brief, timeout, conversation=None, hard_deadline=None, sta
     save(m)
     if incomplete:   # the patch is partial work: inspect it, then resume or take over
         summary["REVIEW_FLAGS"]["INCOMPLETE_RUN"] = incomplete
+    if failure and failure["kind"] == "quota_exhausted":   # quota handoff decision; route via fallback_routes
+        summary["REVIEW_FLAGS"]["QUOTA_EXHAUSTED"] = failure.get("resets_at") or failure["detail"]
+    elif failure:   # server capacity, not quota: resume the same conversation after a short wait
+        summary["REVIEW_FLAGS"]["CAPACITY_UNAVAILABLE"] = failure["detail"]
     if swept:
         summary["REVIEW_FLAGS"]["leftover_processes_killed"] = swept
     summary["guard_denied"] = m["guard"]["denied"][-15:]
@@ -961,7 +995,7 @@ def main():
     r = sp.add_parser("run")
     r.add_argument("--repo", required=True)
     r.add_argument("--brief", required=True)
-    r.add_argument("--model", default="gemini-3.1-pro-high")
+    r.add_argument("--model", required=True, help="explicit agy model ID from the routing profile (`agy models`)")
     r.add_argument("--platform", choices=["codex", "claude", "headless"], default="claude",
                    help="coordinating platform (executor remains agy)")
     r.add_argument("--coordinator-model", default="current", help="coordinator identity for provenance")

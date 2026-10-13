@@ -15,7 +15,7 @@ proof of quota, actual backend version or subscription eligibility.
 ```bash
 L='<installed-auto-skill>/claude_local.py'
 W='<installed-auto-skill>/agy_worker.py'
-python3 "$L" prepare --repo "$PWD" --brief '<brief.md>' --model opus \
+python3 "$L" prepare --repo "$PWD" --brief '<brief.md>' --model sonnet \
   --platform codex --coordinator-model '<actual-model-or-current>' --task-id '<task-id>'
 python3 "$L" observe-funding '<run-id>' --remaining '<remaining-percent>' \
   --observed-at '<ISO-time-with-zone>' --expires-at '<earliest-reset-or-expiry>' \

@@ -177,6 +177,28 @@ verification and the existing SHA/HEAD apply gates, including coordinator repair
 This is a coordinator workflow, not a background quota monitor or automatic CLI
 failover; scheduling a later retry remains a separate user request.
 
+### When agy cannot run
+
+The worker summary names the cause instead of a bare `ERROR`:
+
+- `QUOTA_EXHAUSTED` (value: the reported reset time): the account's allowance for
+  that quota group is used up. Follow the quota handoff decision above. Other agy
+  models are eligible successors only when observed working in a different quota
+  group (for example a run that is still making progress or succeeded after the
+  exhaustion); otherwise use `fallback_routes` from the profile: claude-local
+  `sonnet` for L1/L2 and `opus` for L3 or consequential logic, or Claude cloud
+  when cloud credits are actually observed for a GitHub task.
+- `CAPACITY_UNAVAILABLE`: server-side capacity (HTTP 503), not quota. Wait at
+  least a minute and `resume` the same run once; if it repeats, choose another
+  model for the remaining scope.
+
+claude-local draws on the same Claude subscription as a Claude Code coordinator.
+Read both usage windows before each dispatch, prefer `sonnet` to stretch the
+weekly limit, and note when it resets: a near reset can make waiting cheaper than
+switching channels. Keep extra usage off. Fable is not included in Pro without
+usage credits; a different-model review then falls back to an available model
+(for example Sonnet when the author is Opus) and the report says so.
+
 ### Independent review routing
 
 For explicit `/auto` tasks, default to one bounded, read-only review when there is
