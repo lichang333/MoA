@@ -223,6 +223,25 @@ python3 "$W" run --repo "$PWD" --brief '<brief.md>' --model '<agy-model>' \
   --task-id '<task-id>' --name '<slug>'
 ```
 
+For a Node project, add `--node-modules '<repo>/node_modules'` (an npm-installed
+tree matching the base commit's lockfile; a base that tracks node_modules is refused).
+It is cloned copy-on-write into the worker and verify trees and never enters the
+patch (any case variant). The worker may run its tools as
+`node node_modules/<pkg>/<script>` inside the sandbox; npm/npx and installs stay
+unavailable. agy's file tools cannot edit node_modules, but sandboxed worker code
+can, so `test` re-clones it before each call and `verify` always uses a fresh clone.
+`test` stays advisory (worker code can plant other resolution paths or caches in its
+tree); only `verify --full` on a fresh tree gates apply.
+
+A worker is stopped with status `stalled`, keeping its partial patch, when for
+`--stall-timeout` awake seconds (default 600, `0` disables) it makes no tool call
+and no sandboxed command started by that agy process is still running; leftover
+background processes do not count. Progress is read from the log of the guard
+registered in `~/.gemini/config/hooks.json`. agy's own print timeout and a SUCCESS
+without a final report are recorded as `timeout` and `incomplete`, never as success.
+`seconds` is wall time and `active_seconds` excludes host sleep; a
+`host_sleep_seconds` field means the Mac slept during the run.
+
 Read the entire returned patch and note `patch_sha256`. The worker's report is a
 claim; inspect the changed code and verification output. Check scope, executable
 test/build changes, compatibility, correctness and accidental secrets. Review
@@ -237,6 +256,7 @@ flags have these meanings:
 | `binary_files` | Reject unless the brief requires them; apply needs `--allow-binary` |
 | `ignored_untracked` | Worker-tree tests may depend on omitted files; verify the patch |
 | `leftover_processes_killed` | Report the unexpected background processes |
+| `INCOMPLETE_RUN` | The worker did not finish: review the partial patch, then resume with the remaining scope or take over |
 
 Report suspicious guard denials (network, outside reads, control-file writes),
 even if the worker produced a useful patch. Do not override protected-path gates
@@ -251,7 +271,10 @@ python3 "$W" resume '<run-id>' --brief '<feedback.md>'
 `test` uses the worker tree. `verify` applies a snapshot of the patch to a fresh
 standalone repo at the target HEAD, then runs sandboxed. Mark only the actual full
 suite `--full`; skipped required checks are unverified. Use the project's real
-commands rather than copying the illustrative pytest command blindly.
+commands rather than copying the illustrative pytest command blindly. A passing
+verify tree is removed afterwards (`--keep-tree` keeps it); a failing one stays
+until `clean`. `test --venv` and `verify --venv`, `--node-modules` or
+`--no-node-modules` apply to that call only; `verify` records them in `verified`.
 
 Feedback names the defect, location and expected behavior. Allow at most two
 send-back rounds before escalating or taking over. Every round replaces the patch:

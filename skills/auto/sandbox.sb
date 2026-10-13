@@ -26,6 +26,9 @@
 ;; there, and a link planted by a background test process could redirect them.
 ;; (Symlinks stay allowed in TMP: the tests build fake venvs there.)
 (deny file-write-create (require-all (vnode-type SYMLINK) (subpath (param "ROOT"))))
+;; the private temp dir's own entry: its contents stay writable, but the directory itself can be
+;; neither removed nor replaced (a symlink there would redirect the next run's TMP grant).
+(deny file-write* (literal (param "TMP")))
 (deny file-link)
 ;; never the worktree's control files (mirrors agy_guard.py PROTECTED_*). literal/subpath
 ;; match case-insensitively on APFS; the regexes spell out both cases.

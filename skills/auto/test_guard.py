@@ -17,6 +17,14 @@ os.symlink("/etc/hosts", os.path.join(ROOT, "link_out"))
 open(os.path.join(ROOT, "..", os.path.basename(ROOT) + "-hl-src"), "w").write("x")
 os.link(os.path.join(ROOT, "..", os.path.basename(ROOT) + "-hl-src"), os.path.join(ROOT, "app", "hard.py"))
 ART = os.path.join(HOME, ".gemini", "antigravity-cli", "brain", "conv-test")
+# A run's read-only dependency clone: tool scripts, an npm-style .bin link, and a link leading out.
+for rel in ("node_modules/vitest/vitest.mjs", "node_modules/typescript/bin/tsc"):
+    os.makedirs(os.path.join(ROOT, os.path.dirname(rel)), exist_ok=True)
+    open(os.path.join(ROOT, rel), "w").write("// tool\n")
+os.makedirs(os.path.join(ROOT, "node_modules", ".bin"))
+os.symlink("../vitest/vitest.mjs", os.path.join(ROOT, "node_modules", ".bin", "vitest"))
+os.symlink("/etc/hosts", os.path.join(ROOT, "node_modules", "escape.js"))
+os.symlink("../app/x.py", os.path.join(ROOT, "node_modules", "inward.js"))
 
 
 def run(tool, args, env_worker=True, art=ART, extra_env=None):
@@ -49,6 +57,9 @@ CASES = [
     ("unittest long pattern", lambda: cmd("python -m unittest discover --pattern=test_*.py"), "allow"),
     ("unittest catch interrupt", lambda: cmd("python -m unittest discover -c"), "allow"),
     ("node --test", lambda: cmd("node --test tests/a.test.js"), "allow"),
+    ("node_modules tool", lambda: cmd("node node_modules/vitest/vitest.mjs run tests/a.test.ts"), "allow"),
+    ("node_modules .bin link", lambda: cmd("node node_modules/.bin/vitest run"), "allow"),
+    ("tool args are not node flags", lambda: cmd("node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"), "allow"),
     ("git diff", lambda: cmd("git diff HEAD -- app"), "allow"),
     ("view in root", lambda: run("view_file", {"AbsolutePath": ROOT + "/app/x.py"}), "allow"),
     ("write in root", lambda: run("write_to_file", {"TargetFile": ROOT + "/app/new.py", "CodeContent": "/* x */"}), "allow"),
@@ -140,6 +151,18 @@ CASES = [
     ("node --import", lambda: cmd("node --test --import ./app/x.mjs"), "deny"),
     ("node reporter dest", lambda: cmd("node --test --test-reporter-destination=app/out"), "deny"),
     ("tree -o", lambda: cmd("tree -o app/t"), "deny"),
+    ("node script outside node_modules", lambda: cmd("node app/x.py"), "deny"),
+    ("node_modules traversal", lambda: cmd("node node_modules/../app/x.py"), "deny"),
+    ("node_modules link leading out", lambda: cmd("node node_modules/escape.js"), "deny"),
+    ("node_modules link into worktree", lambda: cmd("node node_modules/inward.js"), "deny"),
+    ("missing node_modules script", lambda: cmd("node node_modules/missing.js"), "deny"),
+    ("node_modules directory", lambda: cmd("node node_modules/vitest"), "deny"),
+    ("node flag before tool", lambda: cmd("node --require=app/x.js node_modules/vitest/vitest.mjs"), "deny"),
+    ("node -e", lambda: cmd("node -e 1"), "deny"),
+    ("tool path arg outside", lambda: cmd("node node_modules/vitest/vitest.mjs run ../../etc"), "deny"),
+    ("tool --opt=outside", lambda: cmd("node node_modules/vitest/vitest.mjs --root=/etc"), "deny"),
+    ("write into node_modules", lambda: run("write_to_file", {"TargetFile": ROOT + "/node_modules/vitest/vitest.mjs", "CodeContent": "x"}), "deny"),
+    ("edit nested node_modules", lambda: run("replace_file_content", {"TargetFile": ROOT + "/app/Node_Modules/x.js", "ReplacementContent": "x"}), "deny"),
     ("write conftest (allowed, review flags it)", lambda: run("write_to_file", {"TargetFile": ROOT + "/tests/conftest.py", "CodeContent": "x"}), "allow"),
     ("manage_task status", lambda: run("manage_task", {"Action": "status", "TaskId": "x/task-1"}), "allow"),
     ("manage_task terminate", lambda: run("manage_task", {"Action": "terminate", "TaskId": "x/task-1"}), "allow"),
@@ -167,10 +190,14 @@ def main():
     unit_ok = rw.split()[0].endswith("run_sandboxed.sh") and "'test_*tv*.py'" in rw
     print(("ok  " if unit_ok else "FAIL") + " unittest pattern preserved inside sandbox")
     fails += not unit_ok
+    rw = cmd("node node_modules/.bin/vitest run")["overwrite"]["CommandLine"]
+    tool_ok = rw.split()[0].endswith("run_sandboxed.sh") and rw.endswith("node node_modules/.bin/vitest run")
+    print(("ok  " if tool_ok else "FAIL") + " node_modules tool runs inside the sandbox: " + rw)
+    fails += not tool_ok
     shutil.rmtree(ROOT, ignore_errors=True)
     shutil.rmtree(ROOT + ".tmp", ignore_errors=True)
     os.unlink(os.path.join(os.path.dirname(ROOT), os.path.basename(ROOT) + "-hl-src"))
-    print(f"\n{len(CASES) + 2 - fails}/{len(CASES) + 2} passed")
+    print(f"\n{len(CASES) + 3 - fails}/{len(CASES) + 3} passed")
     sys.exit(1 if fails else 0)
 
 

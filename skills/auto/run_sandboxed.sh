@@ -34,7 +34,16 @@ VENV="${AUTO_WORKER_VENV:-}"
 if [[ -n "$VENV" && -d "$VENV" ]]; then VENV="$(realpath "$VENV")"; else VENV=/nonexistent; fi
 
 # Private temp dir per worktree (not the shared $TMPDIR, which holds other workers' trees).
-TMP="$ROOT.tmp"; mkdir -p "$TMP"; TMP="$(realpath "$TMP")"
+# TMP and BUSY sit beside ROOT. Sandboxed code may write inside TMP but never replace TMP itself
+# (sandbox.sb), and cannot touch BUSY at all; still refuse anything but a real dir / regular file.
+TMP="$ROOT.tmp"; BUSY="$ROOT.busy"
+[[ -L "$TMP" ]] && { echo "run_sandboxed: refusing symlinked TMP $TMP" >&2; exit 2; }
+mkdir -p "$TMP"
+[[ -d "$TMP" && "$(realpath "$TMP")" == "$TMP" ]] || { echo "run_sandboxed: refusing TMP $TMP" >&2; exit 2; }
+[[ -L "$BUSY" || ( -e "$BUSY" && ! -f "$BUSY" ) ]] && { echo "run_sandboxed: refusing BUSY $BUSY" >&2; exit 2; }
+# Held open across exec and fork by the command and its children: agy_worker.py lists the holders
+# (lsof) to tell a long-running command from a stalled worker and to find leftovers.
+exec 9>>"$BUSY"
 
 P=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
 [[ "$VENV" != /nonexistent ]] && P="$VENV/bin:$P"

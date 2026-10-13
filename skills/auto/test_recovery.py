@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from shlex import quote as shlex_quote
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -51,7 +52,7 @@ class Recovery(unittest.TestCase):
     def simulate(self, *, retries=1, failures=1, mutate=None, clock=None, sleep=None):
         m = dict(id="fixture", rounds=[], guard={"denied": []})
         summaries, persisted = [], []
-        def attempt(meta, brief, timeout, conversation=None, hard_deadline=None):
+        def attempt(meta, brief, timeout, conversation=None, hard_deadline=None, stall_timeout=None):
             n = len(meta["rounds"])
             failed = n < failures
             r = dict(status="ERROR" if failed else "SUCCESS", transport_error=EOF if failed else None,
@@ -123,6 +124,67 @@ class Recovery(unittest.TestCase):
         self.assertEqual(m["rounds"][0]["recovery"]["state"], "cancelled")
         self.assertIn("interrupted", result["network_recovery"]["stop_reason"])
 
+    def test_guard_progress_counts_each_event_once_across_rotation(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "guard.jsonl")
+            event = lambda run: (json.dumps({"run": run, "conv": SID, "tool": "view_file"}) + "\n").encode()
+            with open(log, "wb") as f:
+                f.write(event("old-run"))
+            with patch.dict(os.environ, {"AUTO_GUARD_LOG": log}):
+                progress = worker.GuardProgress("me")
+            self.assertEqual(progress.poll(), 0)   # history before the attempt is not progress
+            line = event("me")
+            with open(log, "ab") as f:
+                f.write(event("me") + event("other") + line[:9])
+            self.assertEqual(progress.poll(), 1)
+            with open(log, "ab") as f:
+                f.write(line[9:])   # the split line is completed, then the guard rotates
+            os.replace(log, log + ".1")
+            with open(log, "wb") as f:
+                f.write(event("me") + event("me"))
+            self.assertEqual(progress.poll(), 3)
+            self.assertEqual(progress.conversation, SID)
+            self.assertEqual(progress.poll(), 0)
+            os.remove(log)   # a missing log is quiet, not an error
+            self.assertEqual(progress.poll(), 0)
+
+    def test_guard_log_follows_the_registered_hook(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d).resolve()
+            guard_dir = home / "with space" / "auto"
+            guard_dir.mkdir(parents=True)
+            (guard_dir / "agy_guard.py").write_text("# guard\n")
+            hooks = home / "hooks.json"
+            def resolve(command):
+                hooks.write_text(json.dumps({"claude-auto-worker-guard": {"PreToolUse": [
+                    {"matcher": "*", "hooks": [{"type": "command", "command": command}]}]}}))
+                env = {k: v for k, v in os.environ.items() if k != "AUTO_GUARD_LOG"}
+                with patch.object(worker, "HOOKS_JSON", str(hooks)), patch.dict(os.environ, env, clear=True), \
+                        patch.dict(os.environ, {"HOME": str(home)}):
+                    return worker.guard_log()
+            expected = str(guard_dir / "logs" / "guard.jsonl")
+            for command in (shlex_quote(str(guard_dir / "agy_guard.py")), "~/'with space'/auto/agy_guard.py",
+                            "python3 " + shlex_quote(str(guard_dir / "agy_guard.py"))):
+                with self.subTest(command=command):
+                    self.assertEqual(resolve(command), expected)
+            for command in ("/nonexistent/agy_guard.py", shlex_quote(str(guard_dir)), "'unterminated"):
+                with self.subTest(command=command):
+                    self.assertEqual(resolve(command), worker.GUARD_LOG)
+            hooks.write_text("not json")
+            with patch.object(worker, "HOOKS_JSON", str(hooks)), patch.dict(os.environ, {"AUTO_GUARD_LOG": ""}):
+                self.assertEqual(worker.guard_log(), worker.GUARD_LOG)
+
+    def test_guard_events_read_the_hook_log_and_this_checkouts_log(self):
+        with tempfile.TemporaryDirectory() as d:
+            hook_log, own_log = os.path.join(d, "hook.jsonl"), os.path.join(d, "own.jsonl")
+            for path, tool in ((hook_log, "agy"), (own_log, "broker")):
+                with open(path, "w") as f:
+                    f.write(json.dumps({"run": "r", "tool": tool, "decision": "deny"}) + "\n")
+            with patch.object(worker, "GUARD_LOG", own_log), patch.dict(os.environ, {"AUTO_GUARD_LOG": hook_log}):
+                self.assertEqual(sorted(e["tool"] for e in worker.guard_events("r")), ["agy", "broker"])
+            with patch.object(worker, "GUARD_LOG", own_log), patch.dict(os.environ, {"AUTO_GUARD_LOG": own_log}):
+                self.assertEqual([e["tool"] for e in worker.guard_events("r")], ["broker"])
+
     def test_real_cli_preserves_partial_patch_and_resumes_same_session(self):
         with tempfile.TemporaryDirectory(prefix="auto-recovery-test-") as d:
             root = Path(d).resolve()
@@ -165,7 +227,8 @@ target.write_text(target.read_text() + '# recovered\\n')
 print(json.dumps(dict(status='SUCCESS', conversation_id={SID!r}, response='done', usage=dict(input_tokens=4))))
 ''')
             fake.chmod(0o755)
-            env = worker.min_env(PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+            env = worker.min_env(PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
+                                 AUTO_GUARD_LOG=str(root / "guard.jsonl"))   # never the user's hook log
             # Load the isolated runtime so both run state and worktrees stay in this fixture.
             entry = """import importlib.util, sys
 spec = importlib.util.spec_from_file_location('worker', sys.argv[1])
