@@ -9,8 +9,10 @@ Read [the shared coding workflow](workflow.md) for every `/auto` task, including
 Claude in this session owns the brief, review, verification and integration.
 [Routing](routing.json) and its shared defaults provide `agy_routes` and
 `agy_alternatives`: Gemini, Claude and GPT-OSS are eligible agy options. Choose
-using the shared workflow's task, availability and allowance criteria; a model
-listing does not establish quota and an agy Claude run does not use cloud credits.
+using the shared workflow's task-fit, availability and allowance criteria. Model
+defaults are starting candidates; assess uncertainty, failure impact and likely
+rework before each dispatch. A model listing does not establish quota and an agy
+Claude run does not use cloud credits.
 
 For suitable GitHub tasks, use confirmed unexpired cloud credits when that
 matches the user's subscription-first funding preference or an explicit task choice. Read the [cloud workflow](cloud-workflow.md)
@@ -39,9 +41,10 @@ the missing decision; do not substitute an unlisted model or call a paid API.
 
 Handle operational/security L0 work directly; an explicit cloud preference can
 still apply to ordinary small GitHub changes. For L3, design first and split implementation into precise
-briefs. If independent implementations are useful, the `agy_routes.l3` route supplies the
-existing two-model option; each gets its own run and isolated tree. Review and
-verify the chosen/combined patch rather than trusting either report.
+briefs. `agy_routes.l3` lists candidates; choose one per bounded task. Use independent
+implementations only when resolving a concrete design uncertainty warrants the
+extra work; each gets its own run and isolated tree. Review and verify the
+chosen/combined patch rather than trusting either report.
 
 ```bash
 W="$HOME/.claude/skills/auto/agy_worker.py"

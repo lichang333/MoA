@@ -37,13 +37,39 @@ user's funding preference. agy retains its local guard and sandbox. An executor'
 | L2 | Multi-file feature or bug with clear acceptance criteria | Profile's `agy_routes.l2` |
 | L3 | Architecture, ambiguity or consequential logic | Plan first, then split into L1/L2; independent review as needed |
 
-These are the local agy defaults, not a Gemini-only policy. `agy_alternatives`
-in the shared profile also supplies Claude and GPT-OSS candidates. Choose one
-executor for the bounded brief using task complexity, the user's model/funding
-preferences and available allowance; always pass its explicit `--model` ID.
-Opus is an option for complex multi-file logic, Sonnet for general implementation,
-and GPT-OSS for bounded work whose acceptance can be checked locally. These are
-routing heuristics, not guarantees of quality or permission to launch all models.
+### Task-fit model selection
+
+The levels above select a workflow. L0 assigns execution to the coordinator; it
+does not imply low difficulty or risk. Judge the bounded task by uncertainty,
+reasoning across components, failure impact and how reliably it can be verified,
+rather than file count alone. Preserve the user's explicit model/channel choice.
+
+`agy_routes`, `agy_alternatives`, `fallback_routes` and the native/cloud model
+defaults are starting candidates, not mandatory choices for every task. Within
+the funding rules, choose a suitable model for the whole accepted result,
+including briefing, review and likely rework:
+
+- Handle straightforward L0 work directly. Add a planning/review call only when
+  it resolves a concrete uncertainty covered by the review criteria below.
+- For a precise implementation with clear local checks, start with the routine
+  route; Sonnet is a native Claude option for this kind of work.
+- For unresolved architecture, difficult diagnosis, interacting invariants or
+  consequential logic, consider an eligible stronger reasoning model up front,
+  such as Opus on a supported Claude channel. Plan or review with it where useful;
+  clear implementation subtasks can then use the routine route. Production and
+  execution-boundary operations still stay with the coordinator.
+
+Choose one executor per bounded brief and pass the selected `--model` explicitly,
+including for native/cloud preparation. In the existing brief, give a short reason
+for the model/channel and any extra review; no separate planning call is needed
+just to make this choice. An L3 candidate list does not request parallel implementations.
+
+If feedback reveals a wrong approach or repeated substantive failures, reassess
+the brief and model before another attempt, within the existing feedback limit.
+Do not keep a routine model solely because it is the default, or restart completed
+work when handing over. Quota/authentication/capacity failures follow their own
+rules below; they are not evidence of task difficulty or permission to bypass
+funding, handoff or verification gates.
 
 Check `agy models` when choosing a model or changing routes. A listed model proves
 availability, not remaining quota. Use the user's current allowance statement or
@@ -185,17 +211,18 @@ The worker summary names the cause instead of a bare `ERROR`:
   that quota group is used up. Follow the quota handoff decision above. Other agy
   models are eligible successors only when observed working in a different quota
   group (for example a run that is still making progress or succeeded after the
-  exhaustion); otherwise use `fallback_routes` from the profile: claude-local
-  `sonnet` for L1/L2 and `opus` for L3 or consequential logic, or Claude cloud
-  when cloud credits are actually observed for a GitHub task.
+  exhaustion); otherwise the handoff decision can consider `fallback_routes`
+  from the profile, adjusted to the remaining task's difficulty and risk, or
+  Claude cloud when cloud credits are actually observed for a GitHub task.
 - `CAPACITY_UNAVAILABLE`: server-side capacity (HTTP 503), not quota. Wait at
   least a minute and `resume` the same run once; if it repeats, choose another
   model for the remaining scope.
 
 claude-local draws on the same Claude subscription as a Claude Code coordinator.
-Read both usage windows before each dispatch, prefer `sonnet` to stretch the
-weekly limit, and note when it resets: a near reset can make waiting cheaper than
-switching channels. Keep extra usage off. Fable is not included in Pro without
+Read both usage windows before each dispatch. The `sonnet` default is a starting
+point for routine tasks; use the task-fit criteria above for the actual selection.
+Note when the allowance resets: a near reset can favor waiting when the user's
+timing permits. Keep extra usage off. Fable is not included in Pro without
 usage credits; a different-model review then falls back to an available model
 (for example Sonnet when the author is Opus) and the report says so.
 
@@ -337,6 +364,9 @@ platform/coordinator/task metadata with the run; legacy records remain readable.
 Report the executor/model, revisions, coordinator corrections, verification
 results and material flags. Review recurring defects in the ledger to adjust
 routing based on observed performance; do not assume a model always wins.
+Include a material routing change and its reason in the existing record notes.
+Assess efficiency using available whole-task usage, retries and acceptance results;
+without comparable evidence, do not claim that a default change saved money.
 
 ### Model usage note
 

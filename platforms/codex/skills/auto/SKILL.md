@@ -25,7 +25,9 @@ resolves findings, performs runtime checks and integrates the result.
 not permission to bypass this skill's external execution boundary. Native agents
 do not inherit agy's guard or macOS sandbox.
 
-Choose the executor using task suitability and the user's funding preference.
+Choose the executor using the shared workflow's task-fit criteria and the user's
+funding preference. Model defaults are starting candidates; assess uncertainty,
+failure impact and likely rework before each dispatch.
 For a GitHub task routed to confirmed unexpired Claude cloud credits under that
 preference, use the
 [cloud workflow](cloud-workflow.md): prepare, observe funding, launch/attach,

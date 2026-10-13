@@ -11,6 +11,10 @@ Inspect the installed CLI version and actual `/model` picker without sending a
 probe prompt or changing the default. Use an eligible alias from
 `claude_local_defaults` in the shared profile. A listed or requested alias is not
 proof of quota, actual backend version or subscription eligibility.
+Apply the shared workflow's task-fit criteria before preparation: the configured
+default is for routine work, and complex or consequential reasoning can warrant
+another eligible alias. Pass the chosen alias explicitly; the `sonnet` example
+below illustrates a routine task.
 
 ```bash
 L='<installed-auto-skill>/claude_local.py'
