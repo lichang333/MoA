@@ -307,6 +307,25 @@ worker.main()
     os.unlink(wt + ".tmp")
     shutil.rmtree(wt)
 
+    quota = "Individual quota reached. Please upgrade your subscription. Resets in 2h3m4s."
+    fake_agy(f"echo q >> app.py; echo 'error: {quota}' >&2", response={"status": "ERROR", "error": quota, "response": ""})
+    env = dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"])
+    o = json.loads(sh(*W, "run", "--repo", REPO, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake",
+                      "--name", "quota", "--timeout", "60", env=env, check=False).stdout)
+    CREATED.append(o["run"])
+    check("an exhausted agy quota is flagged with its reset time and the partial patch kept",
+          o["status"] == "ERROR" and "QUOTA_EXHAUSTED" in o["REVIEW_FLAGS"] and "app.py" in o.get("diffstat", ""),
+          json.dumps(o)[-300:])
+    busy = json.dumps({"short_error": "UNAVAILABLE (code 503): No capacity available for model fake on the server",
+                       "status": "UNAVAILABLE", "error_code": 503, "code_kind": "http", "retryable": True})
+    fake_agy(f"echo {shlex.quote('AGY_ERROR: ' + busy)} >&2; exit 3", response={"status": "ERROR"})
+    o = json.loads(sh(*W, "run", "--repo", REPO, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake",
+                      "--name", "capacity", "--timeout", "60", env=env, check=False).stdout)
+    CREATED.append(o["run"])
+    check("server capacity (503) is flagged as capacity, not quota, and not auto-retried",
+          "CAPACITY_UNAVAILABLE" in o["REVIEW_FLAGS"] and "QUOTA_EXHAUSTED" not in o["REVIEW_FLAGS"]
+          and o["network_recovery"]["retries"] == 0, json.dumps(o)[-300:])
+
     # 13. --node-modules: a copy-on-write clone in the worker and verify trees, never in the patch.
     deps = os.path.join(TMP, "deps", "node_modules")
     os.makedirs(os.path.join(deps, "tool"))

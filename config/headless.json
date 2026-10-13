@@ -7,18 +7,23 @@
     "funding_max_age_minutes": 60
   },
   "claude_local_defaults": {
-    "model": "opus",
+    "model": "sonnet",
     "allowed_models": ["opus", "sonnet", "haiku"],
     "funding_max_age_minutes": 60
   },
   "agy_routes": {
     "l1": "gemini-3.8-flash-high",
-    "l2": "gemini-3.1-pro-high",
-    "l3": ["gemini-3.1-pro-high", "claude-opus-4-6-thinking"]
+    "l2": "claude-sonnet-4-6",
+    "l3": ["claude-opus-4-6-thinking", "gemini-3.8-flash-high"]
+  },
+  "fallback_routes": {
+    "l1": "claude-local:sonnet",
+    "l2": "claude-local:sonnet",
+    "l3": "claude-local:opus"
   },
   "agy_alternatives": {
     "l1": ["claude-sonnet-4-6", "gpt-oss-120b-medium"],
-    "l2": ["claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"]
+    "l2": ["claude-opus-4-6-thinking", "gemini-3.8-flash-high", "gpt-oss-120b-medium"]
   },
   "auto_funding": {
     "priority": ["included_subscription", "authorized_cloud_credit", "authorized_prepaid_api"],

@@ -49,6 +49,21 @@ class Recovery(unittest.TestCase):
         for code, status in ((0, "ERROR"), (1, "ERROR"), (3, "timeout"), (3, "interrupted"), (3, "SUCCESS")):
             self.assertIsNone(worker.transient_network_error(stderr(EOF), code, status))
 
+    def test_agy_failures_are_classified_for_routing(self):
+        import datetime
+        now = datetime.datetime(2026, 10, 13, 17, 31, tzinfo=datetime.timezone(datetime.timedelta(hours=8)))
+        quota = "Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 143h55m3s."
+        out = worker.agy_failure({"error": quota}, "error: " + quota + "\n", now=now)
+        self.assertEqual(out["kind"], "quota_exhausted")
+        self.assertEqual(out["resets_in_seconds"], 143 * 3600 + 55 * 60 + 3)
+        self.assertEqual(out["resets_at"], "2026-10-19T17:26+08:00")
+        busy = dict(short_error="UNAVAILABLE (code 503): No capacity available for model m on the server",
+                    status="UNAVAILABLE", error_code=503, code_kind="http", retryable=True)
+        self.assertEqual(worker.agy_failure({}, stderr(busy))["kind"], "capacity_unavailable")
+        self.assertIsNone(worker.agy_failure({"error": "invalid model selection"}, ""))
+        # The model's own report never counts, only agy's error fields.
+        self.assertIsNone(worker.agy_failure({"response": quota, "status": "ERROR"}, "worker said: " + quota))
+
     def simulate(self, *, retries=1, failures=1, mutate=None, clock=None, sleep=None):
         m = dict(id="fixture", rounds=[], guard={"denied": []})
         summaries, persisted = [], []
