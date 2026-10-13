@@ -45,6 +45,8 @@ def setup():
     sh("git", "-C", REPO, "commit", "-qm", "base")
     sh("git", "-C", REPO, "stash", "list")
     os.makedirs(FAKE)
+    # Read guard events from this isolated runtime, never the user's registered hook log.
+    os.environ["AUTO_GUARD_LOG"] = os.path.join(DIR, "logs", "guard.jsonl")
 
 
 def fake_agy(script, response=None):
@@ -234,6 +236,138 @@ worker.main()
           len(parallel) == 2 and {x["platform"] for x in parallel} == {"codex", "headless"}
           and all(os.path.isfile(os.path.join(DIR, "runs", x["run"], "meta.json")) for x in parallel)
           and not os.path.exists(os.path.join(os.path.dirname(entry), "runs")))
+
+    # 11. agy may report SUCCESS after its own print timeout: never treat partial output as success.
+    o = run("partial", "echo p >> app.py; echo '[agy] print timeout after 40m0s with turn in progress; returning partial output' >&2")
+    check("agy print timeout is recorded as an incomplete timeout, patch kept",
+          o["status"] == "timeout" and "print timeout" in o["REVIEW_FLAGS"].get("INCOMPLETE_RUN", "")
+          and "app.py" in o.get("diffstat", ""), json.dumps(o)[-400:])
+    fake_agy("echo q >> app.py", response={"response": "  "})
+    o = json.loads(sh(*W, "run", "--repo", REPO, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake",
+                      "--name", "no-report", "--timeout", "60", env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"])).stdout)
+    CREATED.append(o["run"])
+    check("SUCCESS without a final report is incomplete",
+          o["status"] == "incomplete" and "INCOMPLETE_RUN" in o["REVIEW_FLAGS"], json.dumps(o)[-300:])
+
+    # 12. stall watchdog: no tool call for --stall-timeout awake seconds stops the worker, keeps the patch;
+    # other runs' guard events are not progress.
+    glog = os.path.join(DIR, "logs", "guard.jsonl")
+    other = shlex.quote(json.dumps({"run": "someone-else", "tool": "view_file", "decision": "allow"}))
+    t0 = time.time()
+    o = run("stall", f"mkdir -p {shlex.quote(os.path.dirname(glog))}; echo s >> app.py; "
+            f"for i in $(seq 120); do echo {other} >> {shlex.quote(glog)}; sleep 1; done", "--stall-timeout", "3")
+    elapsed = time.time() - t0
+    check("stall: stopped early, status stalled, patch captured, flagged",
+          o["status"] == "stalled" and elapsed < 40 and "app.py" in o.get("diffstat", "")
+          and "awake time" in o["REVIEW_FLAGS"].get("INCOMPLETE_RUN", ""), f"{elapsed:.0f}s " + json.dumps(o)[-300:])
+    mine = 'printf \'{"run":"%s","conv":"12345678-1234-4234-8234-123456789abc","tool":"view_file","decision":"allow"}\\n\' "$AUTO_RUN_ID"'
+    o = run("progress", f"mkdir -p {shlex.quote(os.path.dirname(glog))}; "
+            f"for i in 1 2 3 4 5; do {mine} >> {shlex.quote(glog)}; sleep 1.5; done; echo g >> app.py", "--stall-timeout", "3")
+    meta = json.load(open(os.path.join(DIR, "runs", o["run"], "meta.json")))
+    check("steady tool calls keep a slow worker alive and are counted",
+          o["status"] == "SUCCESS" and o["tool_events"] >= 5
+          and meta["rounds"][-1]["guard_conversation"] == "12345678-1234-4234-8234-123456789abc"
+          and "host_sleep_seconds" not in o, json.dumps(o)[-300:])
+
+    o = run("long-command", f"{shlex.quote(SB)} \"$AUTO_WORKER_ROOT\" /bin/sleep 7; echo l >> app.py", "--stall-timeout", "3")
+    check("a long sandboxed command is activity, not a stall", o["status"] == "SUCCESS", json.dumps(o)[-300:])
+    o = run("think-after-command", f"mkdir -p {shlex.quote(os.path.dirname(glog))}; "
+            f"{shlex.quote(SB)} \"$AUTO_WORKER_ROOT\" /bin/sleep 7; sleep 1.5; {mine} >> {shlex.quote(glog)}; echo k >> app.py",
+            "--stall-timeout", "4")
+    check("thinking right after a long command is not a stall", o["status"] == "SUCCESS", json.dumps(o)[-300:])
+    t0 = time.time()
+    o = run("leftover-holder", f"{shlex.quote(SB)} \"$AUTO_WORKER_ROOT\" /bin/sh -c '(/bin/sleep 40 &)'; sleep 60",
+            "--stall-timeout", "4")
+    wt = json.load(open(os.path.join(DIR, "runs", o["run"], "meta.json")))["worktree"]
+    holders = sh("lsof", "-t", "--", wt + ".busy", check=False).stdout.split()
+    check("a leftover sandboxed process does not keep a silent worker alive, and is swept",
+          o["status"] == "stalled" and time.time() - t0 < 40 and not holders, f"{o['status']} {holders}")
+
+    # Sandbox bookkeeping beside the tree cannot be redirected: neither by sandboxed code nor by links.
+    r = sh(SB, wt, "/bin/sh", "-c", f'ln -sf /dev/null {shlex.quote(wt + ".busy")} && echo escaped; rmdir "$TMPDIR" && echo escaped; true', cwd=wt, check=False)
+    check("sandboxed code cannot replace the busy marker or remove its TMP dir",
+          "escaped" not in r.stdout and os.path.isfile(wt + ".busy") and not os.path.islink(wt + ".busy")
+          and os.path.isdir(wt + ".tmp"), r.stdout + r.stderr)
+    victim_file = os.path.join(TMP, "victim")
+    open(victim_file, "w").close()
+    with open(victim_file) as held:
+        victim = subprocess.Popen(["/bin/sleep", "60"], pass_fds=(held.fileno(),))
+    os.unlink(wt + ".busy")
+    os.symlink(victim_file, wt + ".busy")
+    r = sh(SB, wt, "/usr/bin/true", cwd=wt, check=False)
+    sh(*W, "clean", o["run"], check=False)
+    check("a symlinked busy marker is refused; sweep and clean never follow it, clean removes the link",
+          r.returncode == 2 and "refusing BUSY" in r.stderr and victim.poll() is None
+          and not os.path.lexists(wt + ".busy") and os.path.isfile(victim_file), r.stderr)
+    victim.kill()
+    sh("git", "init", "-q", wt)
+    os.symlink(TMP, wt + ".tmp")
+    r = sh(SB, wt, "/usr/bin/true", cwd=wt, check=False)
+    check("a symlinked TMP dir is refused", r.returncode == 2 and "refusing symlinked TMP" in r.stderr, r.stderr)
+    os.unlink(wt + ".tmp")
+    shutil.rmtree(wt)
+
+    # 13. --node-modules: a copy-on-write clone in the worker and verify trees, never in the patch.
+    deps = os.path.join(TMP, "deps", "node_modules")
+    os.makedirs(os.path.join(deps, "tool"))
+    open(os.path.join(deps, "tool", "index.js"), "w").write("// dep\n")
+    o = run("node-deps", 'test -f node_modules/tool/index.js && echo ok > nm.txt; '
+            'case "$*" in *"npm, npx and package installs are unavailable"*) echo note > note.txt;; esac',
+            "--node-modules", deps)
+    rid = o["run"]
+    check("node_modules cloned into the worker tree, preamble says how to use it, excluded from the patch",
+          set(o.get("diffstat", "").split()) >= {"nm.txt", "note.txt"} and "node_modules" not in o.get("diffstat", ""),
+          o.get("diffstat", ""))
+    vtree = os.path.join(json.load(open(os.path.join(DIR, "runs", rid, "meta.json")))["worktree"] + "-verify")
+    r = sh(*W, "verify", rid, "--full", "--", "/bin/test", "-f", "node_modules/tool/index.js", check=False)
+    check("verify clones node_modules and removes a passing tree", r.returncode == 0 and not os.path.exists(vtree), r.stderr)
+    r = sh(*W, "verify", rid, "--keep-tree", "--venv", os.path.join(TMP, "deps"), "--", "/bin/test", "-f", "nm.txt", check=False)
+    meta = json.load(open(os.path.join(DIR, "runs", rid, "meta.json")))
+    check("--keep-tree keeps it; --venv applies to that verification only",
+          r.returncode == 0 and os.path.isdir(vtree) and meta["verified"][-1]["venv"] == os.path.join(TMP, "deps")
+          and not meta["venv"], r.stderr)
+    venv = os.path.join(TMP, "fake-venv")
+    os.makedirs(os.path.join(venv, "bin"))
+    open(os.path.join(venv, "bin", "python"), "w").write("#!/bin/sh\necho used > venv-marker\n")
+    os.chmod(os.path.join(venv, "bin", "python"), 0o755)
+    r = sh(*W, "verify", rid, "--keep-tree", "--venv", venv, "--", "python", "-m", "anything", check=False)
+    check("verify --venv runs that interpreter", r.returncode == 0 and os.path.isfile(os.path.join(vtree, "venv-marker")), r.stderr)
+    worker_tool = os.path.join(json.load(open(os.path.join(DIR, "runs", rid, "meta.json")))["worktree"], "node_modules", "tool", "index.js")
+    open(worker_tool, "w").write("// tampered by worker code\n")
+    r = sh(*W, "test", rid, "--", "/usr/bin/grep", "-q", "dep", "node_modules/tool/index.js", check=False)
+    check("test re-clones the run's node_modules before using its tools", r.returncode == 0, r.stderr)
+    r = sh(*W, "verify", rid, "--no-node-modules", "--", "/bin/test", "!", "-e", "node_modules", check=False)
+    check("verify --no-node-modules skips the clone", r.returncode == 0, r.stderr)
+    # Earlier verified code may lock files in its TMP (chmod/chflags); the next verify starts clean.
+    r = sh(*W, "verify", rid, "--keep-tree", "--", "/bin/sh", "-c",
+           'mkdir -p "$TMPDIR/locked" && echo stale > "$TMPDIR/locked/cache" && chflags uchg "$TMPDIR/locked/cache" '
+           '&& chmod 555 "$TMPDIR/locked"', check=False)
+    locked = os.path.isfile(os.path.join(vtree + ".tmp", "locked", "cache"))
+    r2 = sh(*W, "verify", rid, "--", "/bin/sh", "-c", 'test ! -e "$TMPDIR/locked"', check=False)
+    check("a locked TMP left by earlier verified code is removed before the next verify",
+          r.returncode == 0 and locked and r2.returncode == 0 and not os.path.lexists(os.path.join(vtree + ".tmp", "locked")),
+          r.stderr + r2.stderr)
+    r = sh(*W, "verify", rid, "--", "/bin/test", "-f", "missing", check=False)
+    check("a failing verify tree is kept for inspection", r.returncode != 0 and os.path.isdir(vtree), r.stderr)
+    r = sh(*W, "run", "--repo", REPO, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake",
+           "--node-modules", os.path.join(TMP, "nope"), check=False, env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"]))
+    check("a missing --node-modules dir is refused before any run state", r.returncode != 0 and "not a directory" in r.stderr, r.stderr)
+    o = run("case-variant", "mkdir -p pkg/Node_Modules/dep; echo x > pkg/Node_Modules/dep/index.js; echo c > case.txt")
+    check("case-variant node_modules never enters the patch", "case.txt" in o.get("diffstat", "")
+          and "node_modules" not in o.get("diffstat", "").lower(), o.get("diffstat", ""))
+    vendored = os.path.join(TMP, "vendored")
+    sh("git", "init", "-q", vendored)
+    os.makedirs(os.path.join(vendored, "Node_Modules"))
+    open(os.path.join(vendored, "Node_Modules", "x.js"), "w").write("x\n")
+    sh("git", "-C", vendored, "add", "-A")
+    sh("git", "-C", vendored, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "vendored")
+    before = set(os.listdir(os.path.join(DIR, "runs")))
+    r = sh(*W, "run", "--repo", vendored, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake", "--name", "vendored",
+           "--node-modules", deps, check=False, env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"]))
+    leaked = [x for x in os.listdir(os.path.dirname(vtree)) if "-vendored-" in x]
+    check("a base commit that tracks node_modules is refused and leaves no run state",
+          r.returncode != 0 and "already has node_modules" in r.stderr
+          and set(os.listdir(os.path.join(DIR, "runs"))) == before and not leaked, r.stderr + str(leaked))
 
     for rid in CREATED:
         sh(*W, "clean", rid, check=False)

@@ -73,7 +73,8 @@ PYTEST_BANNED = {"-p", "-c", "-o", "--rootdir", "--confcutdir", "--basetemp", "-
                  "--config-file", "--import-mode"}
 ALLOWED_HELP = ("allowed: read-only tools (ls cat head tail wc grep rg find diff sort ...), "
                 "git status/diff/log/show/blame/ls-files/grep, "
-                "python -m pytest|py_compile|unittest, node --test|--check. "
+                "python -m pytest|py_compile|unittest, node --test|--check, "
+                "node node_modules/<pkg>/<script> (e.g. vitest, tsc) when the run provides node_modules. "
                 "One simple command per call: no pipes, ;, &&, redirects, $(), env-var prefixes. "
                 "Paths must stay inside the worktree. Use your file tools to edit.")
 
@@ -203,9 +204,17 @@ def check_command(args, ctx):
                     check_read(os.path.join(cwd, a[2:]), ctx)
         py = os.path.join(venv, "bin", "python") if venv else "python3"
         final, pos = [py] + rest, rest[2:]
+    elif name == "node" and rest and not rest[0].startswith("-"):
+        # A project tool from the run's read-only node_modules clone (vitest, tsc, ...). It
+        # executes worktree code no more than `node --test` does, and runs sandboxed the same way.
+        script = real(os.path.join(cwd, rest[0]))
+        if not (within(script, ctx["root"]) and rel_parts(script, ctx["root"])[0] == "node_modules"
+                and os.path.isfile(script)):
+            raise Deny("node may only run `--test`, `--check` or a tool script under ./node_modules. " + ALLOWED_HELP)
+        final, pos = ["node"] + rest, rest[1:]
     elif name == "node":
         if not rest or rest[0] not in ("--test", "--check"):
-            raise Deny("node may only run `--test` or `--check`. " + ALLOWED_HELP)
+            raise Deny("node may only run `--test`, `--check` or a tool script under ./node_modules. " + ALLOWED_HELP)
         if any(a in BAD_ARGS["node"] or a.split("=", 1)[0] in BAD_ARGS["node"] for a in rest):
             raise Deny("that node option loads or runs extra code; not allowed")
         final, pos = ["node"] + rest, rest[1:]
