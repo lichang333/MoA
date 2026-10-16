@@ -17,7 +17,7 @@ import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description="Install MoA skills for Codex, Claude, and Gemini (agy).")
-    parser.add_argument("--platform", choices=("codex", "claude", "gemini", "agy", "all"), default="all",
+    parser.add_argument("--platform", choices=("codex", "claude", "gemini", "all"), default="all",
                         help="which platform to install (default: all)")
     parser.add_argument("--dry-run", action="store_true",
                         help="preview changes without writing files or reading API keys")
@@ -27,8 +27,7 @@ def main():
     destinations = {"codex": user_home / ".agents/skills",
                     "claude": user_home / ".claude/skills",
                     "gemini": user_home / ".gemini/config/skills"}
-    chosen = "gemini" if args.platform == "agy" else args.platform
-    platforms = tuple(destinations) if chosen == "all" else (chosen,)
+    platforms = tuple(destinations) if args.platform == "all" else (args.platform,)
     links = [(repo / "platforms" / platform / "skills" / skill,
               destinations[platform] / skill)
              for platform in platforms for skill in ("moa", "auto")]
