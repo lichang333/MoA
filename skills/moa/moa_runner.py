@@ -103,7 +103,8 @@ def load_env():
                 key, value = line.split("=", 1)
                 value = value.strip().strip('"').strip("'")
                 if value and "your_" not in value:
-                    os.environ.setdefault(key.strip(), value)
+                    if not os.environ.get(key.strip()):
+                        os.environ[key.strip()] = value
 
 
 def provider_key(provider):
