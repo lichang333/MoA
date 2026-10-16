@@ -339,6 +339,59 @@ class RunnerTests(unittest.TestCase):
                             {"role": "user", "content": "question"},
                         ])
 
+    def test_cross_review_mode_in_show_config(self):
+        process = subprocess.run([sys.executable, str(runner.SKILL_DIR / "moa_runner.py"),
+                                 "--cross-review", "--cycles", "2", "--show-config"],
+                                 capture_output=True, text=True, env={})
+        self.assertEqual(process.returncode, 0, process.stderr)
+        config = json.loads(process.stdout)
+        self.assertEqual(config["mode"], "cross_review")
+
+    def test_cross_review_rejects_single_active_provider(self):
+        os.environ.update(DEEPSEEK_API_KEY="test-ds")
+        # only deepseek has key, minimax does not
+        code, stdout, stderr, _ = self.invoke(["--models", "deepseek", "--cross-review", "question"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("Cross-review requires at least 2 active providers", stderr)
+
+    def test_cross_review_mock_pipeline_execution(self):
+        os.environ.update(DEEPSEEK_API_KEY="test-ds", MINIMAX_API_KEY="test-minimax")
+
+        def mock_call(provider, prompt, api_key, model, system_prompt=None, max_tokens=None):
+            if "Candidate to Review" in prompt or "expert reviewer" in (system_prompt or ""):
+                payload = {
+                    "review_id": f"rev-{provider}", "reviewer": provider, "target_participant": "target",
+                    "target_version": 1, "no_substantive_issues": True, "issues": []
+                }
+            elif "original author" in (system_prompt or ""):
+                payload = {
+                    "revision_id": f"rev-{provider}-v2", "participant": provider, "version": 2,
+                    "issue_responses": [], "revised_summary": "revised", "revised_answer": "revised"
+                }
+            elif "Lead Synthesizer" in (system_prompt or ""):
+                payload = {
+                    "synthesis_id": "syn", "usable_answer": "Authoritative Synthesis",
+                    "supported_points": ["Point A"], "unresolved_disagreements": [],
+                    "evidence_gaps": [], "next_checks": [], "limitations": [], "stop_reason": "completed"
+                }
+            else:
+                payload = {
+                    "answer_id": f"ans-{provider}-v1", "participant": provider, "version": 1,
+                    "summary": "initial summary", "claims": [{"claim_id": "c1", "statement": "st", "claim_type": "fact"}],
+                    "full_answer": "initial full answer"
+                }
+            return json.dumps(payload)
+
+        code, stdout, stderr, _ = self.invoke(["--models", "deepseek,minimax", "--cross-review", "question"], side_effect=mock_call)
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("===MOA_CROSS_REVIEW_START===", stdout)
+        self.assertIn("Authoritative Synthesis", stdout)
+        self.assertIn("===MOA_CROSS_REVIEW_END===", stdout)
+        record = self.record()
+        self.assertEqual(record["status"], "success")
+        self.assertEqual(record["mode"], "cross_review")
+        self.assertIn("evidence_review", record)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

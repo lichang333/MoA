@@ -89,9 +89,9 @@ are claims, not verification: the coordinator must match them to supplied source
 checks or real tool logs. Prompts now apply these rules to workers, the single
 reviewer and the aggregator; they do not implement a trusted evidence registry.
 
-The current runner performs independent collection and optional aggregation.
-`--review` makes one logical reviewer call on the caller-supplied task/draft;
-it does not fetch previous answers, allocate cross-reviews or revise candidates.
-Raw text markers and default call counts are unchanged. See the
-[optional four-stage experiment](evidence-review-proposal.md) for capabilities
-that require additional orchestration, validation and explicit budgets.
+The runner supports independent collection (`--raw`), single review (`--review`),
+and multi-stage evidence-based cross-review (`--cross-review`).
+Use `--cross-review` (with `--cycles 1` or `--cycles 2`) to execute the four-stage
+collaboration protocol described in [evidence-review-proposal.md](evidence-review-proposal.md):
+independent structured candidates → peer-assigned cross-reviews → author revisions → authoritative synthesis.
+Raw JSON markers `===MOA_CROSS_REVIEW_START===` and `===MOA_CROSS_REVIEW_END===` bracket the final synthesis.

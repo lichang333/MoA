@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -259,6 +260,10 @@ def parser():
     result.add_argument("--models", help="Comma-separated external providers, e.g. deepseek,gemini")
     result.add_argument("--raw", action="store_true", help="Return worker JSON without an API aggregator")
     result.add_argument("--review", "--glm52", dest="review", action="store_true")
+    result.add_argument("--cross-review", "--evidence-review", dest="cross_review", action="store_true",
+                        help="Run multi-stage evidence-based cross-review and revision")
+    result.add_argument("--cycles", type=int, choices=(1, 2), default=1,
+                        help="Number of cross-review cycles (default: 1, max: 2)")
     result.add_argument("--show-config", "--dry-run", dest="show_config", action="store_true",
                         help="Show effective routing without loading credentials or calling APIs")
     return result
@@ -279,7 +284,7 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError) as error:
         cli.error(str(error))
 
-    mode = "review" if args.review else "raw" if args.raw else config["mode"]
+    mode = "cross_review" if args.cross_review else "review" if args.review else "raw" if args.raw else config["mode"]
     worker_configuration = [{"provider": name, **config["providers"][name]} for name in selected]
     if args.show_config:
         print(json.dumps({**config, "platform": args.platform, "mode": mode,
@@ -348,6 +353,40 @@ def main(argv=None):
         return finish("failed", "No aggregator is available for selected providers; use --raw or include an aggregator provider")
     if mode == "aggregate":
         record["aggregation_configuration"] = {"provider": aggregator, **config["providers"][aggregator]}
+
+    if mode == "cross_review":
+        if len(active) < 2:
+            return finish("failed", "Cross-review requires at least 2 active providers with API keys")
+        spec = importlib.util.spec_from_file_location("evidence_review", SKILL_DIR / "evidence_review.py")
+        er = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(er)
+
+        def call_fn(provider, prompt, system_prompt):
+            key = active.get(provider) or provider_key(provider)
+            if not key:
+                return {"status": "failed", "error": f"Missing API key for {provider}"}
+            return run_worker(provider, config["providers"][provider], prompt, key, system_prompt=system_prompt, max_tokens=4096)
+
+        print(f"Starting MoA Cross-Review ({args.cycles} cycle{'s' if args.cycles > 1 else ''}) with {len(active)} models: " +
+              ", ".join(config["providers"][name]["display_name"] for name in active))
+        orchestrator = er.EvidenceReviewOrchestrator(
+            task=args.prompt,
+            participants=list(active.keys()),
+            call_fn=call_fn,
+            cycles=args.cycles,
+            synthesizer=aggregator or list(active.keys())[0]
+        )
+        trace = orchestrator.run()
+        record["evidence_review"] = trace
+        record["synthesis"] = trace.get("synthesis")
+
+        if trace.get("synthesis", {}).get("error"):
+            return finish("failed", f"Cross-review failed: {trace['synthesis']['error']}")
+
+        print("===MOA_CROSS_REVIEW_START===")
+        print(json.dumps(trace["synthesis"], ensure_ascii=False, indent=2))
+        print("===MOA_CROSS_REVIEW_END===")
+        return finish("success")
 
     print(f"Starting MoA with {len(active)} worker models: " + ", ".join(
         config["providers"][name]["display_name"] for name in active))
