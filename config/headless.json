@@ -14,7 +14,7 @@
   "agy_routes": {
     "l1": "gemini-3.8-flash-high",
     "l2": "gemini-3.8-flash-high",
-    "l3": ["claude-opus-4-6-thinking", "gemini-3.8-flash-high"]
+    "l3": ["gemini-3.8-flash-high", "claude-opus-4-6-thinking"]
   },
   "fallback_routes": {
     "l1": "claude-local:sonnet",
