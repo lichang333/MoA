@@ -1073,7 +1073,7 @@ def main():
     r.add_argument("--repo", required=True)
     r.add_argument("--brief", required=True)
     r.add_argument("--model", required=True, help="explicit agy model ID from the routing profile (`agy models`)")
-    r.add_argument("--platform", choices=["codex", "claude", "gemini", "agy", "headless"], default="claude",
+    r.add_argument("--platform", choices=["codex", "claude", "gemini", "headless"], default="claude",
                    help="coordinating platform (executor remains agy)")
     r.add_argument("--coordinator-model", default="current", help="coordinator identity for provenance")
     r.add_argument("--task-id", help="optional task ID from the coordinating platform")
