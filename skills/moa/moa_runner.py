@@ -8,7 +8,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,7 +30,9 @@ KEY_NAMES = {
     "deepseek": ("DEEPSEEK_API_KEY",),
     "minimax": ("MINIMAX_API_KEY",),
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "codex": ("CODEX_CLI", "CODEX_AUTH"),
 }
+
 ENDPOINTS = {
     "openai": "https://api.openai.com/v1/chat/completions",
     "anthropic": "https://api.anthropic.com/v1/messages",
@@ -106,6 +111,8 @@ def load_env():
                 if value and "your_" not in value:
                     if not os.environ.get(key.strip()):
                         os.environ[key.strip()] = value
+    if shutil.which("codex") and not os.environ.get("CODEX_CLI"):
+        os.environ["CODEX_CLI"] = "installed"
 
 
 def provider_key(provider):
@@ -116,7 +123,38 @@ def call_model(provider, prompt, api_key, model, system_prompt=None, max_tokens=
     """Only external providers reach this adapter; native role IDs are never dispatched."""
     if provider not in KEY_NAMES:
         raise ValueError(f"Unknown external API provider: {provider}")
+    if provider == "codex":
+        codex_bin = shutil.which("codex") or "codex"
+        full_prompt = prompt
+        if system_prompt:
+            full_prompt = f"<system_instructions>\n{system_prompt}\n</system_instructions>\n\n{prompt}"
+        with tempfile.NamedTemporaryFile(mode="r", delete=False) as out_f:
+            out_path = out_f.name
+        try:
+            cmd = [
+                codex_bin, "exec", "--ephemeral", "-s", "read-only",
+                "--color", "never",
+                "-o", out_path,
+                "-m", model or "gpt-6-astra",
+                "-"
+            ]
+            proc = subprocess.run(cmd, input=full_prompt, text=True, capture_output=True, timeout=timeout)
+            if proc.returncode != 0:
+                raise RuntimeError(f"codex exec failed (exit {proc.returncode}): {proc.stderr.strip()[:1000]}")
+            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        finally:
+            if os.path.exists(out_path):
+                try:
+                    os.unlink(out_path)
+                except OSError:
+                    pass
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Empty or invalid model response from Codex")
+        return content.strip()
+
     headers = {"Content-Type": "application/json"}
+
     if provider == "gemini":
         # API key goes in the x-goog-api-key header, not the URL: keys in query
         # strings end up in proxy and server access logs.
@@ -383,10 +421,15 @@ def main(argv=None):
         if trace.get("synthesis", {}).get("error"):
             return finish("failed", f"Cross-review failed: {trace['synthesis']['error']}")
 
+        failed_calls = trace.get("call_stats", {}).get("failed_calls", 0)
+        status = "partial_success" if failed_calls > 0 else "success"
+        if failed_calls > 0:
+            record["warnings"] = [f"{failed_calls} call(s) failed or required fallback during cross-review stages"]
+
         print("===MOA_CROSS_REVIEW_START===")
         print(json.dumps(trace["synthesis"], ensure_ascii=False, indent=2))
         print("===MOA_CROSS_REVIEW_END===")
-        return finish("success")
+        return finish(status)
 
     print(f"Starting MoA with {len(active)} worker models: " + ", ".join(
         config["providers"][name]["display_name"] for name in active))

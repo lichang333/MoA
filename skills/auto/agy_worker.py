@@ -971,6 +971,83 @@ def cmd_record(a):
     print(json.dumps(entry, ensure_ascii=False))
 
 
+def cmd_review(a):
+    m = load(a.run_id)
+    patch_file = os.path.join(RUNS, a.run_id, "diff.patch")
+    if not os.path.exists(patch_file):
+        sys.exit(f"REFUSED: no patch found for run {a.run_id} at {patch_file}")
+    with open(patch_file, "r", encoding="utf-8", errors="replace") as f:
+        patch_text = f.read()
+    if not patch_text.strip():
+        out = {"run": a.run_id, "status": "empty_patch", "summary": "Patch is empty (no changes made)."}
+        if a.json:
+            print(json.dumps(out, ensure_ascii=False))
+        else:
+            print("Codex Review: Patch is empty (no changes made).")
+        return
+
+    codex_bin = shutil.which("codex")
+    if not codex_bin:
+        sys.exit("REFUSED: `codex` command line tool is not found on PATH. Ensure Codex CLI is installed.")
+
+    brief_file = os.path.join(RUNS, a.run_id, f"brief-{len(m['rounds'])}.md")
+    if not os.path.exists(brief_file):
+        brief_file = os.path.join(RUNS, a.run_id, "brief-1.md")
+    brief_text = open(brief_file, "r", encoding="utf-8", errors="replace").read() if os.path.exists(brief_file) else "(no brief recorded)"
+
+    review_prompt = (
+        "You are an expert code reviewer evaluating a patch produced by an autonomous coding worker.\n"
+        "Analyze the following brief and git diff for correctness, edge cases, regression risks, safety violations, and code quality.\n\n"
+        f"### Original Task Brief:\n{brief_text}\n\n"
+        f"### Generated Git Patch:\n{patch_text}\n\n"
+        "Provide a concise, checkable code review detailing:\n"
+        "1. Summary verdict (Acceptable / Needs Revision / Defective)\n"
+        "2. Key defects or edge cases found (with file and line references if applicable)\n"
+        "3. Recommended verification checks before apply\n"
+    )
+
+    with tempfile.NamedTemporaryFile(mode="r", delete=False) as out_f:
+        out_path = out_f.name
+
+    try:
+        cmd = [
+            codex_bin, "exec", "--ephemeral", "-s", "read-only",
+            "--color", "never",
+            "-o", out_path,
+            "-m", a.model,
+            "-"
+        ]
+        proc = subprocess.run(cmd, input=review_prompt, text=True, capture_output=True, timeout=a.timeout)
+        if proc.returncode != 0:
+            sys.exit(f"REFUSED: codex review failed (exit {proc.returncode}): {proc.stderr.strip()[:1000]}")
+        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+            review_text = f.read().strip()
+    finally:
+        if os.path.exists(out_path):
+            with contextlib.suppress(OSError):
+                os.unlink(out_path)
+
+    review_record = {
+        "run": a.run_id,
+        "model": a.model,
+        "reviewed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "patch_sha256": hashlib.sha256(patch_text.encode("utf-8")).hexdigest(),
+        "review": review_text
+    }
+    with open(os.path.join(RUNS, a.run_id, "codex_review.json"), "w", encoding="utf-8") as f:
+        json.dump(review_record, f, indent=2, ensure_ascii=False)
+
+    m["codex_review"] = review_record
+    save(m)
+
+    if a.json:
+        print(json.dumps(review_record, ensure_ascii=False, indent=2))
+    else:
+        print(f"=== CODEX REVIEW FOR {a.run_id} ({a.model}) ===\n")
+        print(review_text)
+        print(f"\nSaved to {os.path.join(RUNS, a.run_id, 'codex_review.json')}")
+
+
 def cmd_clean(a):
     m = load(a.run_id)
     for wt in (m["worktree"], os.path.join(WT_BASE, m["id"] + "-verify")):
@@ -1037,6 +1114,12 @@ def main():
     r.add_argument("--allow-protected", action="store_true")
     r.add_argument("--allow-binary", action="store_true")
     r.set_defaults(fn=cmd_apply)
+    r = sp.add_parser("review")
+    r.add_argument("run_id")
+    r.add_argument("--model", default="gpt-6-astra", help="Codex model for review (default: gpt-6-astra)")
+    r.add_argument("--timeout", type=int, default=600)
+    r.add_argument("--json", action="store_true", help="output JSON review record")
+    r.set_defaults(fn=cmd_review)
     r = sp.add_parser("record")
     r.add_argument("run_id")
     r.add_argument("--level", required=True, choices=["L1", "L2", "L3"])
@@ -1048,6 +1131,7 @@ def main():
     r.add_argument("run_id")
     r.set_defaults(fn=cmd_clean)
     sp.add_parser("list").set_defaults(fn=cmd_list)
+
     argv = sys.argv[1:]
     cmd = argv[argv.index("--") + 1:] if "--" in argv else []   # everything after -- is the command
     argv = argv[:argv.index("--")] if "--" in argv else argv

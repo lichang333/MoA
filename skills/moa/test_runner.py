@@ -310,6 +310,8 @@ class RunnerTests(unittest.TestCase):
     def test_adapter_payloads_use_configured_models_without_network(self):
         providers = runner.load_config("headless")["providers"]
         for provider, settings in providers.items():
+            if provider == "codex":
+                continue
             with self.subTest(provider=provider):
                 if provider == "gemini":
                     content = b'data: {"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}\n\n'
@@ -338,6 +340,28 @@ class RunnerTests(unittest.TestCase):
                             {"role": "system", "content": runner.WORKER_RULES},
                             {"role": "user", "content": "question"},
                         ])
+
+    def test_codex_adapter_calls_cli_without_network(self):
+        settings = runner.load_config("headless")["providers"]["codex"]
+        def fake_run(cmd, input=None, text=True, capture_output=True, timeout=None):
+            out_idx = cmd.index("-o") + 1
+            out_file = cmd[out_idx]
+            Path(out_file).write_text("codex answer")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(runner.subprocess, "run", side_effect=fake_run) as mock_sub:
+            answer = runner.call_model("codex", "question", "synthetic-key", settings["model"],
+                                       system_prompt=runner.WORKER_RULES)
+            self.assertEqual(answer, "codex answer")
+            mock_sub.assert_called_once()
+            cmd, kwargs = mock_sub.call_args[0][0], mock_sub.call_args[1]
+            self.assertIn("codex", cmd[0])
+            self.assertIn("exec", cmd)
+            self.assertIn("-m", cmd)
+            self.assertIn(settings["model"], cmd)
+            self.assertIn(runner.WORKER_RULES, kwargs["input"])
+            self.assertIn("question", kwargs["input"])
+
 
     def test_cross_review_mode_in_show_config(self):
         process = subprocess.run([sys.executable, str(runner.SKILL_DIR / "moa_runner.py"),

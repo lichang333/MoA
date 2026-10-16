@@ -32,7 +32,10 @@ headless behavior.
 `--models` accepts comma-separated provider names. Prefer a relevant subset when
 it suffices; the legacy default remains all configured providers. Keys are local
 to the shared `skills/moa/.env` or the existing environment/Desktop fallback.
+The `codex` provider executes locally via `codex exec` (default model `gpt-6-astra`)
+using the user's active ChatGPT subscription credentials without requiring an API key.
 Do not print keys or copy them into platform directories.
+
 
 ## Synthesis
 
