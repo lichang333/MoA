@@ -1,0 +1,10 @@
+{
+  "extends": "headless.json",
+  "mode": "raw",
+  "native_roles": {
+    "coordinator": "current",
+    "planner": "gemini-3.8-pro",
+    "reviewer": "gemini-3.8-pro",
+    "explorer": "gemini-3.8-flash"
+  }
+}

@@ -242,7 +242,7 @@ def default_platform():
     # Resolve directory symlinks (installed skills), but preserve the script's
     # entrypoint directory: resolving the file itself would erase the platform.
     entry_dir = Path(__file__).absolute().parent.resolve()
-    for platform in ("codex", "claude"):
+    for platform in ("codex", "claude", "gemini", "agy"):
         if entry_dir == SKILL_DIR.parent.parent / "platforms" / platform / "skills" / "moa":
             return platform
     return "headless"
@@ -251,7 +251,7 @@ def default_platform():
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("prompt", nargs="?")
-    result.add_argument("--platform", choices=("codex", "claude", "headless"), default=default_platform(),
+    result.add_argument("--platform", choices=("codex", "claude", "gemini", "agy", "headless"), default=default_platform(),
                         help="Defaults to the platform entrypoint, or headless for the shared script")
     result.add_argument("--coordinator-model", default="current", help="Session model metadata; never an API provider")
     result.add_argument("--task-id")

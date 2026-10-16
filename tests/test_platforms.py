@@ -16,7 +16,7 @@ class PlatformPackages(unittest.TestCase):
                      "sandbox.sb", "test_guard.py", "test_worker.py", "test_recovery.py", "claude_cloud.py", "test_cloud.py",
                      "claude_local.py", "claude_broker.py", "test_local.py"),
         }
-        for platform in ("codex", "claude"):
+        for platform in ("codex", "claude", "gemini"):
             for skill, scripts in files.items():
                 entry = ROOT / "platforms" / platform / "skills" / skill
                 with self.subTest(platform=platform, skill=skill):
@@ -38,7 +38,7 @@ class PlatformPackages(unittest.TestCase):
                     self.assertTrue((entry / profile["extends"]).is_file())
 
     def test_installed_command_shapes_resolve_without_model_calls(self):
-        for platform in ("codex", "claude"):
+        for platform in ("codex", "claude", "gemini"):
             entry = ROOT / "platforms" / platform / "skills"
             with self.subTest(platform=platform):
                 preview = subprocess.run(

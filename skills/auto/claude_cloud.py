@@ -337,7 +337,7 @@ def main():
     r.add_argument("--brief", required=True)
     r.add_argument("--base", default="HEAD")
     r.add_argument("--model")
-    r.add_argument("--platform", choices=("codex", "claude", "headless"), default="codex")
+    r.add_argument("--platform", choices=("codex", "claude", "gemini", "agy", "headless"), default="codex")
     r.add_argument("--coordinator-model", default="current")
     r.add_argument("--task-id")
     r.set_defaults(fn=cmd_prepare)
