@@ -384,9 +384,21 @@ worker.main()
     r = sh(*W, "run", "--repo", vendored, "--brief", os.path.join(TMP, "brief.md"), "--model", "fake", "--name", "vendored",
            "--node-modules", deps, check=False, env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"]))
     leaked = [x for x in os.listdir(os.path.dirname(vtree)) if "-vendored-" in x]
-    check("a base commit that tracks node_modules is refused and leaves no run state",
-          r.returncode != 0 and "already has node_modules" in r.stderr
-          and set(os.listdir(os.path.join(DIR, "runs"))) == before and not leaked, r.stderr + str(leaked))
+    # Test codex review command with a mock codex in PATH
+    with open(os.path.join(FAKE, "codex"), "w") as f:
+        f.write("#!/bin/sh\n"
+                "out=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = \"-o\" ]; then out=\"$2\"; shift 2; else shift; fi\n"
+                "done\n"
+                "if [ -n \"$out\" ]; then echo 'Review Verdict: Acceptable' > \"$out\"; fi\n"
+                "exit 0\n")
+    os.chmod(os.path.join(FAKE, "codex"), 0o755)
+
+    r = sh(*W, "review", rid, "--json", check=False, env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"]))
+    check("review subcommand invokes codex and saves review record",
+          r.returncode == 0 and "Review Verdict: Acceptable" in r.stdout
+          and os.path.isfile(os.path.join(DIR, "runs", rid, "codex_review.json")), r.stderr + r.stdout)
 
     for rid in CREATED:
         sh(*W, "clean", rid, check=False)

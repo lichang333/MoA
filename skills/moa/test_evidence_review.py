@@ -320,6 +320,90 @@ class EvidenceReviewUnitTests(unittest.TestCase):
         self.assertEqual(trace["cycles"][1]["assignments"], [("A", "C"), ("B", "A"), ("C", "B")])
         self.assertEqual(trace["synthesis"]["stop_reason"], "completed")
 
+    def test_version_integer_validation(self):
+        s1 = {
+            "answer_id": "ans-p1-v1", "participant": "p1", "version": "1",
+            "summary": "Core summary", "claims": [{"claim_id": "c1", "statement": "Fact", "claim_type": "fact"}],
+            "full_answer": "Complete text"
+        }
+        valid, _ = er.validate_stage1(s1)
+        self.assertTrue(valid)
+        self.assertEqual(s1["version"], 1)
+
+        s1_invalid = dict(s1, version="not-a-number")
+        valid, err = er.validate_stage1(s1_invalid)
+        self.assertFalse(valid)
+        self.assertIn("integer", err)
+
+        s3 = {
+            "revision_id": "rev-p1-v2", "participant": "p1", "version": "2",
+            "issue_responses": [{"issue_id": "i1", "disposition": "accept", "reason": "ok"}],
+            "revised_summary": "sum", "revised_answer": "ans"
+        }
+        valid, _ = er.validate_stage3(s3)
+        self.assertTrue(valid)
+        self.assertEqual(s3["version"], 2)
+
+    def test_explicit_zero_budget_blocks_calls(self):
+        called = []
+        def mock_call(p, prompt, sys):
+            called.append(p)
+            return {"status": "success", "response": "{}"}
+
+        orch = er.EvidenceReviewOrchestrator("Task", ["A", "B"], mock_call, max_calls=0)
+        self.assertEqual(orch.max_calls, 0)
+        trace = orch.run()
+        self.assertEqual(len(called), 0)
+        self.assertEqual(trace["call_stats"]["total_calls"], 0)
+
+    def test_repair_prompt_contains_original_task(self):
+        repair_calls = []
+        def mock_call(p, prompt, sys):
+            if "Your previous response" in prompt:
+                repair_calls.append(prompt)
+                payload = {
+                    "answer_id": f"ans-{p}-v1", "participant": p, "version": 1,
+                    "summary": "s", "claims": [{"claim_id": "c1", "statement": "st", "claim_type": "fact"}],
+                    "full_answer": "ans"
+                }
+                return {"status": "success", "response": json.dumps(payload)}
+            return {"status": "success", "response": "not-valid-json"}
+
+        orch = er.EvidenceReviewOrchestrator("SECRET_TASK_TOKEN", ["A", "B"], mock_call)
+        orch.run()
+        self.assertTrue(any("SECRET_TASK_TOKEN" in call for call in repair_calls))
+
+    def test_stage4_synthesis_includes_review_history_and_initial_candidates(self):
+        synthesis_sys_prompts = []
+        def mock_call(p, prompt, sys):
+            if "Lead Synthesizer" in (sys or ""):
+                synthesis_sys_prompts.append(sys)
+                payload = {
+                    "synthesis_id": "syn", "usable_answer": "ans",
+                    "supported_points": [], "unresolved_disagreements": [],
+                    "evidence_gaps": [], "next_checks": [], "limitations": [],
+                    "stop_reason": "completed"
+                }
+            elif "expert reviewer" in (sys or ""):
+                payload = {
+                    "review_id": "rev", "reviewer": p, "target_participant": "B" if p == "A" else "A",
+                    "target_version": 1, "no_substantive_issues": True, "issues": []
+                }
+            else:
+                payload = {
+                    "answer_id": f"ans-{p}-v1", "participant": p, "version": 1,
+                    "summary": f"summary-{p}", "claims": [{"claim_id": "c1", "statement": "st", "claim_type": "fact"}],
+                    "full_answer": f"full-{p}"
+                }
+            return {"status": "success", "response": json.dumps(payload)}
+
+        orch = er.EvidenceReviewOrchestrator("Task", ["A", "B"], mock_call, cycles=1)
+        orch.run()
+        self.assertEqual(len(synthesis_sys_prompts), 1)
+        self.assertIn("review_history", synthesis_sys_prompts[0])
+        self.assertIn("initial_candidates", synthesis_sys_prompts[0])
+
 
 if __name__ == "__main__":
     unittest.main()
+

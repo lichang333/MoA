@@ -151,6 +151,9 @@ You must return a JSON object with this exact structure:
 REPAIR_PROMPT = """Your previous response did not conform to the required JSON schema.
 Error details: {error}
 
+Context / Task being addressed:
+{task}
+
 Raw response received:
 {raw_response}
 
@@ -175,6 +178,13 @@ def validate_stage1(data: Any) -> Tuple[bool, Optional[str]]:
     for field in ("answer_id", "participant", "version", "summary", "claims", "full_answer"):
         if field not in data:
             return False, f"Missing required field: {field}"
+    try:
+        v = int(data.get("version", 0))
+        if v < 1:
+            return False, "Field 'version' must be an integer >= 1"
+        data["version"] = v
+    except (TypeError, ValueError):
+        return False, "Field 'version' must be an integer >= 1"
     if not isinstance(data["claims"], list):
         return False, "Field 'claims' must be a list"
     for claim in data["claims"]:
@@ -185,6 +195,7 @@ def validate_stage1(data: Any) -> Tuple[bool, Optional[str]]:
         if claim["claim_type"] not in ("fact", "assumption", "inference", "recommendation"):
             return False, f"Invalid claim_type: {claim['claim_type']}"
     return True, None
+
 
 
 def validate_stage2(data: Any) -> Tuple[bool, Optional[str]]:
@@ -213,6 +224,13 @@ def validate_stage3(data: Any) -> Tuple[bool, Optional[str]]:
     for field in ("revision_id", "participant", "version", "issue_responses", "revised_summary", "revised_answer"):
         if field not in data:
             return False, f"Missing required field: {field}"
+    try:
+        v = int(data.get("version", 0))
+        if v < 1:
+            return False, "Field 'version' must be an integer >= 1"
+        data["version"] = v
+    except (TypeError, ValueError):
+        return False, "Field 'version' must be an integer >= 1"
     if not isinstance(data["issue_responses"], list):
         return False, "Field 'issue_responses' must be a list"
     for resp in data["issue_responses"]:
@@ -271,7 +289,8 @@ class EvidenceReviewOrchestrator:
         self.participants = list(dict.fromkeys(participants))
         self.call_fn = call_fn
         self.cycles = max(1, min(cycles, 2))  # Bound cycles to at most 2 per proposal
-        self.max_calls = max_calls or (len(self.participants) * (1 + self.cycles * 2) + 2)
+        self.max_calls = max_calls if max_calls is not None else (len(self.participants) * (1 + self.cycles * 2) + 2)
+
         self.synthesizer = synthesizer or (self.participants[0] if self.participants else "synthesizer")
         
         self.call_count = 0
@@ -332,6 +351,7 @@ class EvidenceReviewOrchestrator:
             
             repair_prompt = REPAIR_PROMPT.format(
                 error=validation_error,
+                task=prompt,
                 raw_response=raw_text[:2000]
             )
             repair_res = self.call_fn(provider, repair_prompt, system_prompt)
@@ -459,7 +479,12 @@ class EvidenceReviewOrchestrator:
         # -------------------------------------------------------------
         # Stage 4: Synthesis
         # -------------------------------------------------------------
-        all_candidates_summary = json.dumps(current_answers, ensure_ascii=False, indent=2)
+        synthesis_input = {
+            "final_revisions": current_answers,
+            "initial_candidates": self.trace["stage1_answers"],
+            "review_history": self.trace["cycles"]
+        }
+        all_candidates_summary = json.dumps(synthesis_input, ensure_ascii=False, indent=2)
         sys_prompt = STAGE4_PROMPT.format(
             rules=COMMON_EVIDENCE_RULES,
             task=self.task,

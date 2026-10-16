@@ -349,11 +349,17 @@ or enables a paid API fallback. A failed historical run is not retried on startu
 ## Integrate and record
 
 ```bash
+python3 "$W" review '<run-id>' --model gpt-6-astra
 python3 "$W" apply '<run-id>' --sha '<reviewed-sha256>'
 python3 "$W" record '<run-id>' --level L2 --outcome accepted \
   --notes '<review and verification summary>'
 python3 "$W" clean '<run-id>'
 ```
+
+`review` invokes the local `codex exec` in a read-only sandbox using the user's
+logged-in ChatGPT subscription (`gpt-6-astra` by default) to evaluate the generated
+patch against the brief. It checks for correctness, edge cases, regression risks and
+safety issues, printing the review and saving it to `runs/<id>/codex_review.json`.
 
 Apply changes the working tree without staging. Commit, push, PR and deployment
 follow the user's requested scope and standing authorization. Coordinator edits
