@@ -284,14 +284,23 @@ class EvidenceReviewUnitTests(unittest.TestCase):
     def test_orchestrator_two_cycles(self):
         def mock_call(provider, prompt, system_prompt):
             if "expert reviewer" in system_prompt:
-                payload = {
-                    "review_id": f"rev-{provider}", "reviewer": provider, "target_participant": "t",
-                    "target_version": 1, "no_substantive_issues": True, "issues": []
-                }
+                # Cycle 1 raises an issue so cycle 2 runs; cycle 2 converges
+                if "target_version: 2" in system_prompt:
+                    payload = {
+                        "review_id": f"rev-{provider}", "reviewer": provider, "target_participant": "t",
+                        "target_version": 2, "no_substantive_issues": True, "issues": []
+                    }
+                else:
+                    payload = {
+                        "review_id": f"rev-{provider}", "reviewer": provider, "target_participant": "t",
+                        "target_version": 1, "no_substantive_issues": False,
+                        "issues": [{"issue_id": "iss-1", "issue_type": "evidence_gap", "critique": "critique", "proposed_check": "check"}]
+                    }
             elif "original author" in system_prompt:
                 payload = {
                     "revision_id": f"rev-{provider}-v", "participant": provider, "version": 2,
-                    "issue_responses": [], "revised_summary": "revised", "revised_answer": "revised"
+                    "issue_responses": [{"issue_id": "iss-1", "disposition": "accept", "reason": "accepted"}],
+                    "revised_summary": "revised", "revised_answer": "revised"
                 }
             elif "Lead Synthesizer" in system_prompt:
                 payload = {
@@ -319,6 +328,39 @@ class EvidenceReviewUnitTests(unittest.TestCase):
         self.assertEqual(trace["cycles"][0]["assignments"], [("A", "B"), ("B", "C"), ("C", "A")])
         self.assertEqual(trace["cycles"][1]["assignments"], [("A", "C"), ("B", "A"), ("C", "B")])
         self.assertEqual(trace["synthesis"]["stop_reason"], "completed")
+
+    def test_orchestrator_early_stops_when_no_issues(self):
+        def mock_call(provider, prompt, system_prompt):
+            if "expert reviewer" in system_prompt:
+                payload = {
+                    "review_id": f"rev-{provider}", "reviewer": provider, "target_participant": "t",
+                    "target_version": 1, "no_substantive_issues": True, "issues": []
+                }
+            elif "Lead Synthesizer" in system_prompt:
+                payload = {
+                    "synthesis_id": "syn", "usable_answer": "done", "supported_points": [],
+                    "unresolved_disagreements": [], "evidence_gaps": [], "next_checks": [],
+                    "limitations": [], "stop_reason": "completed"
+                }
+            else:
+                payload = {
+                    "answer_id": f"ans-{provider}-v1", "participant": provider, "version": 1,
+                    "summary": "s", "claims": [{"claim_id": "c1", "statement": "st", "claim_type": "fact"}],
+                    "full_answer": "ans"
+                }
+            return {"status": "success", "response": json.dumps(payload)}
+
+        orchestrator = er.EvidenceReviewOrchestrator(
+            task="Task",
+            participants=["A", "B", "C"],
+            call_fn=mock_call,
+            cycles=2
+        )
+        trace = orchestrator.run()
+        # Early stop stops at cycle 1 because all reviewers reported no issues
+        self.assertEqual(len(trace["cycles"]), 1)
+        self.assertEqual(trace["synthesis"]["stop_reason"], "completed")
+
 
     def test_version_integer_validation(self):
         s1 = {

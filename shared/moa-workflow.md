@@ -98,3 +98,16 @@ Use `--cross-review` (with `--cycles 1` or `--cycles 2`) to execute the four-sta
 collaboration protocol described in [evidence-review-proposal.md](evidence-review-proposal.md):
 independent structured candidates → peer-assigned cross-reviews → author revisions → authoritative synthesis.
 Raw JSON markers `===MOA_CROSS_REVIEW_START===` and `===MOA_CROSS_REVIEW_END===` bracket the final synthesis.
+Stages 1 (Independent Answers), 2 (Cross-Reviews), and 3 (Revisions) execute their model calls concurrently
+via worker thread pools while preserving deterministic candidate ordering and thread-safe budget limits.
+
+## Provider health and latency check (`--doctor`)
+
+To probe connectivity, authentication, and response latency across configured external API and local CLI providers without running a full query, use `--doctor` (or `--status`):
+
+```bash
+python3 "$R" --doctor
+python3 "$R" --models deepseek,codex --doctor
+```
+
+This pings targets in parallel with a minimal request (`max_tokens=10`) and displays a concise summary table reporting status (`✅ OK`, `⚠️ No Auth`, or `❌ Error`), round-trip latency, and diagnostic details.
