@@ -262,7 +262,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_platform_entrypoints_infer_raw_without_platform_argument(self):
         repo = runner.SKILL_DIR.parent.parent
-        for platform in ("codex", "claude"):
+        for platform in ("codex", "claude", "gemini"):
             platform_dir = repo / "platforms" / platform / "skills" / "moa"
             installed = self.root / platform / ".agents" / "skills" / "moa"
             installed.parent.mkdir(parents=True)
@@ -282,6 +282,7 @@ class RunnerTests(unittest.TestCase):
             (runner.SKILL_DIR / "moa_runner.py", [], "headless", "aggregate"),
             (repo / "platforms/codex/skills/moa/moa_runner.py", ["--platform", "headless"], "headless", "aggregate"),
             (repo / "platforms/claude/skills/moa/moa_runner.py", ["--platform", "codex"], "codex", "raw"),
+            (repo / "platforms/gemini/skills/moa/moa_runner.py", ["--platform", "gemini"], "gemini", "raw"),
             (runner.SKILL_DIR / "moa_runner.py", ["--platform", "claude"], "claude", "raw"),
         ]
         for entry, flags, platform, mode in cases:

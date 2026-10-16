@@ -30,7 +30,7 @@ class InstallTests(unittest.TestCase):
                  "timeout": 15}]}]}}))
         self.write("skills/moa/.env.example", "EXAMPLE_API_KEY=\n")
         self.write("skills/auto/agy_guard.py", "#!/usr/bin/env python3\n")
-        for platform in ("codex", "claude"):
+        for platform in ("codex", "claude", "gemini"):
             for skill in ("moa", "auto"):
                 self.write(f"platforms/{platform}/skills/{skill}/SKILL.md",
                            f"{platform}: {skill}\n")
@@ -68,12 +68,12 @@ class InstallTests(unittest.TestCase):
             (shared / ".env").chmod(0o600)
         (shared / "runs").mkdir()
         (shared / "runs/history.json").write_text('{"old": true}\n')
-        directory = ".agents" if platform == "codex" else ".claude"
+        directory = ".agents" if platform == "codex" else ".claude" if platform == "claude" else ".gemini/config"
         self.link(f"{directory}/skills/moa", shared)
         return shared
 
     def assert_installed(self, platform):
-        directory = ".agents" if platform == "codex" else ".claude"
+        directory = ".agents" if platform == "codex" else ".claude" if platform == "claude" else ".gemini/config"
         for skill in ("moa", "auto"):
             path = self.user_home / directory / "skills" / skill
             self.assertTrue(path.is_symlink())
@@ -102,6 +102,7 @@ class InstallTests(unittest.TestCase):
         self.invoke()
         self.assert_installed("codex")
         self.assert_installed("claude")
+        self.assert_installed("gemini")
         hook = self.hooks()[HOOK_KEY]["PreToolUse"][0]["hooks"][0]
         self.assertEqual(shlex.split(hook["command"]),
                          [str(self.repo / "skills/auto/agy_guard.py")])
@@ -112,12 +113,28 @@ class InstallTests(unittest.TestCase):
         self.invoke("--platform", "codex")
         self.assert_installed("codex")
         self.assertFalse((self.user_home / ".claude").exists())
+        self.assertFalse((self.user_home / ".gemini/config/skills").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
-    def test_claude_only_does_not_install_codex(self):
+    def test_claude_only_does_not_install_others(self):
         self.invoke("--platform", "claude")
         self.assert_installed("claude")
         self.assertFalse((self.user_home / ".agents").exists())
+        self.assertFalse((self.user_home / ".gemini/config/skills").exists())
+        self.assertIn(HOOK_KEY, self.hooks())
+
+    def test_gemini_only_does_not_install_others(self):
+        self.invoke("--platform", "gemini")
+        self.assert_installed("gemini")
+        self.assertFalse((self.user_home / ".agents").exists())
+        self.assertFalse((self.user_home / ".claude").exists())
+        self.assertIn(HOOK_KEY, self.hooks())
+
+    def test_agy_alias_installs_gemini(self):
+        self.invoke("--platform", "agy")
+        self.assert_installed("gemini")
+        self.assertFalse((self.user_home / ".agents").exists())
+        self.assertFalse((self.user_home / ".claude").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
     def test_legacy_shared_install_is_migrated_with_backups(self):
@@ -127,6 +144,7 @@ class InstallTests(unittest.TestCase):
         self.invoke()
         self.assert_installed("codex")
         self.assert_installed("claude")
+        self.assert_installed("gemini")
         self.assertEqual(len(self.backups()), 3)
         self.assertTrue(all(path.is_symlink() for path in self.backups()))
 
