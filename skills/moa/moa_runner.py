@@ -12,8 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
+
 import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -302,6 +304,8 @@ def parser():
                         help="Run multi-stage evidence-based cross-review and revision")
     result.add_argument("--cycles", type=int, choices=(1, 2), default=1,
                         help="Number of cross-review cycles (default: 1, max: 2)")
+    result.add_argument("--doctor", "--status", dest="doctor", action="store_true",
+                        help="Probe and report health and latency for configured external and local providers")
     result.add_argument("--show-config", "--dry-run", dest="show_config", action="store_true",
                         help="Show effective routing without loading credentials or calling APIs")
     return result
@@ -329,8 +333,74 @@ def main(argv=None):
                           "coordinator_model": args.coordinator_model, "task_id": args.task_id,
                           "selected_workers": worker_configuration}, ensure_ascii=False, indent=2))
         return 0
+
+    if args.doctor:
+        load_env()
+        targets = [p for p in config["providers"] if p in selected] if args.models is not None else list(config["providers"].keys())
+        providers = {p: config["providers"][p] for p in targets}
+        print(f"MoA Provider Health & Latency Check ({args.platform} profile)")
+        print("-" * 78)
+        
+        def probe_provider(name):
+            settings = providers[name]
+            key = provider_key(name)
+            ptype = "Local CLI" if name == "codex" else "API"
+            if not key:
+                return {
+                    "provider": name,
+                    "model": settings["model"],
+                    "type": ptype,
+                    "status": "⚠️ No Auth",
+                    "latency": "-",
+                    "details": "Key missing or CLI not found"
+                }
+            
+            t0 = time.monotonic()
+            try:
+                res = call_model(name, "Ping: reply with PONG", key, settings["model"], max_tokens=10, timeout=15)
+                latency = int((time.monotonic() - t0) * 1000)
+                details = res.replace("\n", " ").strip()
+                if len(details) > 30:
+                    details = details[:27] + "..."
+                return {
+                    "provider": name,
+                    "model": settings["model"],
+                    "type": ptype,
+                    "status": "✅ OK",
+                    "latency": f"{latency}ms",
+                    "details": details
+                }
+            except Exception as e:
+                latency = int((time.monotonic() - t0) * 1000)
+                err_msg = error_text(e, key)[:35].replace("\n", " ")
+                return {
+                    "provider": name,
+                    "model": settings["model"],
+                    "type": ptype,
+                    "status": "❌ Error",
+                    "latency": f"{latency}ms",
+                    "details": err_msg
+                }
+
+        results = []
+        with ThreadPoolExecutor(max_workers=max(1, len(providers))) as executor:
+            for item in executor.map(probe_provider, list(providers.keys())):
+                results.append(item)
+
+        header = f"{'Provider':<12} {'Model':<26} {'Type':<11} {'Status':<11} {'Latency':<10} {'Details'}"
+        print(header)
+        print("-" * 78)
+        for r in results:
+            print(f"{r['provider']:<12} {r['model']:<26} {r['type']:<11} {r['status']:<11} {r['latency']:<10} {r['details']}")
+        print("-" * 78)
+        
+        ok_count = sum(1 for r in results if "✅" in r["status"])
+        print(f"Summary: {ok_count}/{len(results)} providers healthy.")
+        return 0 if ok_count > 0 else 1
+
     if not args.prompt:
-        cli.error("a prompt is required unless --show-config or --dry-run is used")
+        cli.error("a prompt is required unless --show-config, --dry-run or --doctor is used")
+
 
     record = {
         "schema_version": 1, "prompt_version": PROMPT_VERSION, "run_id": str(uuid.uuid4()), "platform": args.platform,

@@ -416,6 +416,33 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(record["mode"], "cross_review")
         self.assertIn("evidence_review", record)
 
+    def test_doctor_command_probes_providers_and_reports_table(self):
+        os.environ["DEEPSEEK_API_KEY"] = "synthetic-key"
+        code, stdout, stderr, call = self.invoke(["--doctor", "--models", "deepseek"], result="PONG")
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("MoA Provider Health & Latency Check", stdout)
+        self.assertIn("deepseek", stdout)
+        self.assertIn("✅ OK", stdout)
+        self.assertIn("Summary: 1/1 providers healthy.", stdout)
+        self.assertEqual(call.call_count, 1)
+        self.assertEqual(call.call_args[0][0], "deepseek")
+        self.assertEqual(call.call_args[1].get("max_tokens"), 10)
+
+    def test_doctor_command_reports_no_auth_when_keys_missing(self):
+        code, stdout, stderr, call = self.invoke(["--doctor", "--models", "deepseek"])
+        self.assertEqual(code, 1, stderr)
+        self.assertIn("⚠️ No Auth", stdout)
+        self.assertIn("Summary: 0/1 providers healthy.", stdout)
+        call.assert_not_called()
+
+    def test_doctor_command_handles_provider_errors(self):
+        os.environ["DEEPSEEK_API_KEY"] = "synthetic-key"
+        code, stdout, stderr, call = self.invoke(["--doctor", "--models", "deepseek"], side_effect=RuntimeError("Connection refused"))
+        self.assertEqual(code, 1, stderr)
+        self.assertIn("❌ Error", stdout)
+        self.assertIn("Connection refused", stdout)
+        self.assertIn("Summary: 0/1 providers healthy.", stdout)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

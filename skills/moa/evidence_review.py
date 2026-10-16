@@ -8,10 +8,13 @@ Implements the four-stage collaboration protocol:
 
 Enforces zero-forced-dissent, bounded format repair, and strict JSON schema validation.
 """
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import re
+import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
 
 
 SCHEMA_VERSION = "evidence-review-v1"
@@ -290,9 +293,9 @@ class EvidenceReviewOrchestrator:
         self.call_fn = call_fn
         self.cycles = max(1, min(cycles, 2))  # Bound cycles to at most 2 per proposal
         self.max_calls = max_calls if max_calls is not None else (len(self.participants) * (1 + self.cycles * 2) + 2)
-
         self.synthesizer = synthesizer or (self.participants[0] if self.participants else "synthesizer")
         
+        self._lock = threading.Lock()
         self.call_count = 0
         self.repair_count = 0
         self.max_repairs_per_stage = 1
@@ -319,15 +322,16 @@ class EvidenceReviewOrchestrator:
         system_prompt: str,
         validator: Callable[[Any], Tuple[bool, Optional[str]]],
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        if self.call_count >= self.max_calls:
-            return None, "Budget limit reached before dispatch"
-            
-        self.call_count += 1
-        self.trace["call_stats"]["total_calls"] = self.call_count
+        with self._lock:
+            if self.call_count >= self.max_calls:
+                return None, "Budget limit reached before dispatch"
+            self.call_count += 1
+            self.trace["call_stats"]["total_calls"] = self.call_count
         
         res = self.call_fn(provider, prompt, system_prompt)
         if res.get("status") != "success":
-            self.trace["call_stats"]["failed_calls"] += 1
+            with self._lock:
+                self.trace["call_stats"]["failed_calls"] += 1
             return None, res.get("error", "Unknown transport error")
             
         raw_text = res.get("response", "")
@@ -343,12 +347,16 @@ class EvidenceReviewOrchestrator:
             validation_error = f"JSON decode error: {e}"
 
         # Bounded format repair (maximum 1 per stage attempt)
-        if self.repair_count < self.max_repairs_per_stage and self.call_count < self.max_calls:
-            self.repair_count += 1
-            self.call_count += 1
-            self.trace["call_stats"]["repairs"] = self.repair_count
-            self.trace["call_stats"]["total_calls"] = self.call_count
-            
+        can_repair = False
+        with self._lock:
+            if self.repair_count < self.max_repairs_per_stage and self.call_count < self.max_calls:
+                self.repair_count += 1
+                self.call_count += 1
+                self.trace["call_stats"]["repairs"] = self.repair_count
+                self.trace["call_stats"]["total_calls"] = self.call_count
+                can_repair = True
+
+        if can_repair:
             repair_prompt = REPAIR_PROMPT.format(
                 error=validation_error,
                 task=prompt,
@@ -364,7 +372,8 @@ class EvidenceReviewOrchestrator:
                 except Exception:
                     pass
 
-        self.trace["call_stats"]["failed_calls"] += 1
+        with self._lock:
+            self.trace["call_stats"]["failed_calls"] += 1
         return None, f"Schema validation failed: {validation_error}"
 
     def run(self) -> Dict[str, Any]:
@@ -373,10 +382,11 @@ class EvidenceReviewOrchestrator:
             raise ValueError("Evidence review protocol requires at least 2 participants")
 
         # -------------------------------------------------------------
-        # Stage 1: Independent Answers
+        # Stage 1: Independent Answers (Concurrent)
         # -------------------------------------------------------------
         current_answers: Dict[str, Dict[str, Any]] = {}
-        for p in self.participants:
+
+        def run_stage1(p):
             sys_prompt = STAGE1_PROMPT.format(rules=COMMON_EVIDENCE_RULES)
             answer, err = self._call_with_validation(
                 provider=p,
@@ -384,11 +394,15 @@ class EvidenceReviewOrchestrator:
                 system_prompt=sys_prompt,
                 validator=validate_stage1,
             )
-            if answer:
-                current_answers[p] = answer
-                self.trace["stage1_answers"][p] = answer
-            else:
-                self.trace["stage1_answers"][p] = {"error": err, "failed": True}
+            return p, answer, err
+
+        with ThreadPoolExecutor(max_workers=max(1, len(self.participants))) as executor:
+            for p, answer, err in executor.map(run_stage1, self.participants):
+                if answer:
+                    current_answers[p] = answer
+                    self.trace["stage1_answers"][p] = answer
+                else:
+                    self.trace["stage1_answers"][p] = {"error": err, "failed": True}
 
         if len(current_answers) < 2:
             self.trace["synthesis"] = {
@@ -414,8 +428,9 @@ class EvidenceReviewOrchestrator:
             cycle_record["assignments"] = assignments
             reviews_by_target: Dict[str, List[Dict[str, Any]]] = {p: [] for p in active_participants}
             
-            # Stage 2: Cross-Review
-            for reviewer, target in assignments:
+            # Stage 2: Cross-Review (Concurrent)
+            def run_stage2(pair):
+                reviewer, target = pair
                 target_ans = current_answers[target]
                 target_content = json.dumps(target_ans, ensure_ascii=False, indent=2)
                 sys_prompt = STAGE2_PROMPT.format(
@@ -423,24 +438,39 @@ class EvidenceReviewOrchestrator:
                     target_participant=target,
                     target_version=target_ans.get("version", cycle_idx)
                 )
-                
                 review_obj, err = self._call_with_validation(
                     provider=reviewer,
                     prompt=f"Original Task:\n{self.task}\n\nCandidate Answer by {target}:\n{target_content}",
                     system_prompt=sys_prompt,
                     validator=validate_stage2
                 )
-                if review_obj:
-                    cycle_record["reviews"][f"{reviewer}_on_{target}"] = review_obj
-                    reviews_by_target[target].append(review_obj)
-                else:
-                    cycle_record["reviews"][f"{reviewer}_on_{target}"] = {"error": err, "failed": True}
+                return reviewer, target, review_obj, err
 
-            # Stage 3: Revision
-            for p in active_participants:
+            with ThreadPoolExecutor(max_workers=max(1, len(assignments))) as executor:
+                for reviewer, target, review_obj, err in executor.map(run_stage2, assignments):
+                    key = f"{reviewer}_on_{target}"
+                    if review_obj:
+                        cycle_record["reviews"][key] = review_obj
+                        reviews_by_target[target].append(review_obj)
+                    else:
+                        cycle_record["reviews"][key] = {"error": err, "failed": True}
+
+            # Check early convergence: if all reviews completed with no substantive issues
+            all_no_issues = bool(cycle_record["reviews"]) and all(
+                r.get("no_substantive_issues") is True
+                for r in cycle_record["reviews"].values()
+                if not r.get("failed")
+            ) and not any(r.get("failed") for r in cycle_record["reviews"].values())
+
+            if all_no_issues:
+                self.trace["cycles"].append(cycle_record)
+                break
+
+            # Stage 3: Revision (Concurrent)
+            def run_stage3(p):
                 revs_for_p = reviews_by_target.get(p, [])
                 if not revs_for_p:
-                    continue
+                    return p, None, None, False
                 
                 curr_ver = current_answers[p].get("version", 1)
                 new_ver = curr_ver + 1
@@ -453,28 +483,35 @@ class EvidenceReviewOrchestrator:
                     reviews_content=json.dumps(revs_for_p, ensure_ascii=False, indent=2),
                     participant=p
                 )
-                
                 revision_obj, err = self._call_with_validation(
                     provider=p,
                     prompt="Please review the feedback on your answer and provide your revised output as specified.",
                     system_prompt=sys_prompt,
                     validator=validate_stage3
                 )
-                if revision_obj:
-                    cycle_record["revisions"][p] = revision_obj
-                    # Update current working answer for subsequent cycle or synthesis
-                    current_answers[p] = {
-                        "answer_id": revision_obj.get("revision_id"),
-                        "participant": p,
-                        "version": new_ver,
-                        "summary": revision_obj.get("revised_summary", ""),
-                        "full_answer": revision_obj.get("revised_answer", ""),
-                        "issue_responses": revision_obj.get("issue_responses", [])
-                    }
-                else:
-                    cycle_record["revisions"][p] = {"error": err, "failed": True}
+                return p, revision_obj, err, True
+
+            with ThreadPoolExecutor(max_workers=max(1, len(active_participants))) as executor:
+                for p, revision_obj, err, had_reviews in executor.map(run_stage3, active_participants):
+                    if not had_reviews:
+                        continue
+                    if revision_obj:
+                        cycle_record["revisions"][p] = revision_obj
+                        curr_ver = current_answers[p].get("version", 1)
+                        new_ver = curr_ver + 1
+                        current_answers[p] = {
+                            "answer_id": revision_obj.get("revision_id"),
+                            "participant": p,
+                            "version": new_ver,
+                            "summary": revision_obj.get("revised_summary", ""),
+                            "full_answer": revision_obj.get("revised_answer", ""),
+                            "issue_responses": revision_obj.get("issue_responses", [])
+                        }
+                    else:
+                        cycle_record["revisions"][p] = {"error": err, "failed": True}
 
             self.trace["cycles"].append(cycle_record)
+
 
         # -------------------------------------------------------------
         # Stage 4: Synthesis
