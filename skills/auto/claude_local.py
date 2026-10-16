@@ -359,7 +359,7 @@ def main():
     p = sub.add_parser("prepare")
     p.add_argument("--repo", required=True); p.add_argument("--brief", required=True)
     p.add_argument("--base", default="HEAD"); p.add_argument("--model")
-    p.add_argument("--venv", default=""); p.add_argument("--platform", choices=("codex", "claude", "gemini", "agy", "headless"), default="codex")
+    p.add_argument("--venv", default=""); p.add_argument("--platform", choices=("codex", "claude", "gemini", "headless"), default="codex")
     p.add_argument("--coordinator-model", default="current"); p.add_argument("--task-id")
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser("observe-funding")
