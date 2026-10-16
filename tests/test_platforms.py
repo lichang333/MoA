@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PlatformPackages(unittest.TestCase):
     def test_entrypoints_link_to_complete_shared_runtime(self):
         files = {
-            "moa": ("moa_runner.py", "test_runner.py"),
+            "moa": ("moa_runner.py", "test_runner.py", "evidence_review.py", "test_evidence_review.py"),
             "auto": ("agy_worker.py", "agy_guard.py", "run_sandboxed.sh",
                      "sandbox.sb", "test_guard.py", "test_worker.py", "test_recovery.py", "claude_cloud.py", "test_cloud.py",
                      "claude_local.py", "claude_broker.py", "test_local.py"),
