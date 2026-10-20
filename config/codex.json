@@ -7,5 +7,28 @@
     "reviewer": "gpt-6-astra",
     "implementer": "gpt-6.1-sol",
     "explorer": "gpt-6-luna"
+  },
+  "agy_routes": {
+    "l1": "claude-sonnet-4-6",
+    "l2": "claude-opus-4-6-thinking",
+    "l3": [
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium"
+    ]
+  },
+  "agy_alternatives": {
+    "l1": [
+      "gpt-oss-120b-medium",
+      "claude-opus-4-6-thinking"
+    ],
+    "l2": [
+      "gpt-oss-120b-medium",
+      "claude-sonnet-4-6"
+    ]
+  },
+  "fallback_routes": {
+    "l1": "gemini-3.8-flash-high",
+    "l2": "gemini-3.8-flash-high",
+    "l3": "gemini-3.8-flash-high"
   }
 }
