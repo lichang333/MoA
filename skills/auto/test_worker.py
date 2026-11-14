@@ -3,6 +3,7 @@
 (never the user's repos, never Gemini). Each scenario is an attack or failure found by the
 2026-10-11 red-team rounds. Run: python3 ~/.claude/skills/auto/test_worker.py
 """
+import importlib.util
 import json
 import os
 import shlex
@@ -35,6 +36,8 @@ def setup():
     os.makedirs(DIR)
     for name in ("agy_worker.py", "run_sandboxed.sh", "sandbox.sb"):
         shutil.copy2(os.path.join(SOURCE_DIR, name), os.path.join(DIR, name))
+    shutil.copy2(os.path.join(SOURCE_DIR, "..", "..", "config", "headless.json"),
+                 os.path.join(DIR, "headless.json"))
     os.makedirs(REPO)
     sh("git", "init", "-q", REPO)
     for k, v in (("user.email", "t@t"), ("user.name", "t")):
@@ -118,15 +121,19 @@ def main():
           not any(os.path.exists(os.path.join(wt, "sub", n)) for n in (".claude/s.json", ".envrc", ".gitattributes")), r.stdout)
     # Exercise actual sandbox writes, including existing mixed-case nested config files.
     codex_paths = (".codex/config.toml", "sub/.CoDeX/config.toml")
-    for rel in codex_paths:
+    opencode_paths = (".opencode/opencode.jsonc", "sub/.OpenCode/skill.md")
+    for rel in codex_paths + opencode_paths:
         path = os.path.join(wt, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         open(path, "w").write("original\n")
-    r = sh(SB, wt, "/bin/sh", "-c", "echo changed > .codex/config.toml; echo changed > sub/.CoDeX/config.toml; mkdir -p other/.CODEX; echo new > other/.CODEX/config.toml",
+    r = sh(SB, wt, "/bin/sh", "-c",
+           "echo changed > .codex/config.toml; echo changed > sub/.CoDeX/config.toml; mkdir -p other/.CODEX; echo new > other/.CODEX/config.toml; "
+           "echo changed > .opencode/opencode.jsonc; echo changed > sub/.OpenCode/skill.md; mkdir -p other/.OPENCODE; echo new > other/.OPENCODE/opencode.jsonc",
            cwd=wt, env=dict(os.environ, AUTO_WORKER_GITDIR=wt + "/.git"), check=False)
-    check("sandbox: root and nested mixed-case .codex writes blocked",
-          all(open(os.path.join(wt, rel)).read() == "original\n" for rel in codex_paths)
-          and not os.path.exists(os.path.join(wt, "other/.CODEX/config.toml")), r.stderr[-300:])
+    check("sandbox: root and nested mixed-case .codex/.opencode writes blocked",
+          all(open(os.path.join(wt, rel)).read() == "original\n" for rel in codex_paths + opencode_paths)
+          and not os.path.exists(os.path.join(wt, "other/.CODEX/config.toml"))
+          and not os.path.exists(os.path.join(wt, "other/.OPENCODE/opencode.jsonc")), r.stderr[-300:])
     # 7. worker repo is standalone: no stash/branches/remotes from the user's repo
     r = sh("git", "-C", wt, "log", "--all", "--oneline")
     check("worker repo holds only the base commit", len(r.stdout.strip().splitlines()) == 1, r.stdout)
@@ -399,6 +406,145 @@ worker.main()
     check("review subcommand invokes codex and saves review record",
           r.returncode == 0 and "Review Verdict: Acceptable" in r.stdout
           and os.path.isfile(os.path.join(DIR, "runs", rid, "codex_review.json")), r.stderr + r.stdout)
+
+    # Test opencode protected paths and agy review command with a mock agy in PATH
+    oc = run("opencode-protected",
+             "mkdir -p .opencode sub/.OpenCode; echo x > .opencode/opencode.jsonc; echo x > sub/.OpenCode/skill.md",
+             "--platform", "opencode", "--coordinator-model", "zhipu/glm-5.2", "--task-id", "oc-task")
+    check("patch capture flags root and nested mixed-case .opencode and records opencode platform",
+          set(oc.get("REVIEW_FLAGS", {}).get("protected_paths", [])) == set(opencode_paths)
+          and oc.get("platform") == "opencode" and oc.get("coordinator_model") == "zhipu/glm-5.2")
+    sh(*W, "verify", oc["run"], "--full", "--", "/usr/bin/true")
+    r = sh(*W, "apply", oc["run"], "--sha", oc["patch_sha256"], check=False)
+    check("apply refuses protected .opencode even after full verify",
+          r.returncode != 0 and "protected paths" in r.stderr and not os.path.exists(os.path.join(REPO, ".opencode")), r.stderr)
+
+    fake_agy("true", response={"status": "SUCCESS", "response": "Review Verdict: Acceptable (agy)"})
+    r = sh(*W, "review", rid, "--executor", "agy", "--json", check=False, env=dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"]))
+    agy_review_path = os.path.join(DIR, "runs", rid, "agy_review.json")
+    check("review --executor agy invokes agy in plan mode and saves agy_review.json",
+          r.returncode == 0 and "Review Verdict: Acceptable (agy)" in r.stdout
+          and os.path.isfile(agy_review_path)
+          and json.load(open(agy_review_path)).get("model") == "gemini-pro-orchestrator", r.stderr + r.stdout)
+
+    # 14. Active agy catalog (`models`), profile loading via symlink, and model alias resolution.
+    r = sh(*W, "models", "--json", check=False)
+    cat = json.loads(r.stdout) if r.returncode == 0 else {}
+    check("models --json returns 8 families and 19 models with zero gemini-3.8 entries",
+          r.returncode == 0
+          and len(cat.get("families", [])) == 8
+          and len(cat.get("models", [])) == 19
+          and "gemini-3.8" not in r.stdout
+          and "live_models" not in cat
+          and set(cat.get("agy_alternatives", {})) >= {"l1", "l2", "l3", "review"}
+          and cat.get("agy_routes", {}).get("l1") == "gemini-4-carbon-high"
+          and bool(cat.get("fallback_routes")),
+          r.stderr + r.stdout[:300])
+
+    os.symlink(os.path.join(DIR, "headless.json"), os.path.join(os.path.dirname(entry), "headless.json"))
+    r = sh(sys.executable, entry, "models", "--json", check=False)
+    sym_cat = json.loads(r.stdout) if r.returncode == 0 else {}
+    check("models --json resolves headless.json beside a symlinked platform entrypoint",
+          r.returncode == 0 and len(sym_cat.get("families", [])) == 8 and len(sym_cat.get("models", [])) == 19,
+          r.stderr + r.stdout[:300])
+
+    r = sh(*W, "models", check=False)
+    check("models human-readable table lists active catalog without gemini-3.8",
+          r.returncode == 0 and "8 families, 19 models" in r.stdout
+          and "gemini-pro-orchestrator" in r.stdout and "gemini-3.8" not in r.stdout,
+          r.stderr + r.stdout[:300])
+
+    with open(os.path.join(FAKE, "agy"), "w") as f:
+        f.write("#!/bin/sh\n"
+                "if [ \"$1\" = \"models\" ]; then\n"
+                "  printf '\\r⠋ Fetching available models...\\rgemini-4-carbon-high         Gemini 4 Carbon (High)\\n"
+                "gemini-pro-orchestrator      Orchestrator (Carbon)\\n"
+                "extra-future-model           Extra Future\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n")
+    os.chmod(os.path.join(FAKE, "agy"), 0o755)
+    env = dict(os.environ, PATH=FAKE + ":" + os.environ["PATH"])
+    r = sh(*W, "models", "--live", "--json", env=env, check=False)
+    live_cat = json.loads(r.stdout) if r.returncode == 0 else {}
+    live_by_id = {item["id"]: item for item in live_cat.get("live_models", [])}
+    check("models --live --json annotates live_models from `agy models`",
+          r.returncode == 0
+          and live_by_id.get("gemini-4-carbon-high", {}).get("in_catalog") is True
+          and live_by_id.get("gemini-pro-orchestrator", {}).get("in_catalog") is True
+          and live_by_id.get("extra-future-model", {}).get("in_catalog") is False
+          and "Fetching" not in live_by_id,
+          r.stderr + r.stdout[:300])
+
+    spec = importlib.util.spec_from_file_location("agy_worker_under_test", W[1])
+    worker_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(worker_mod)
+    expected_aliases = {
+        "Orchestrator (Carbon)": "gemini-pro-orchestrator",
+        "orchestrator": "gemini-pro-orchestrator",
+        "Orchestrator (Argon)": "gemini-pro-orchestrator-argon",
+        "Gemini 4 Carbon": "gemini-4-carbon-high",
+        "Gemini 4 Carbon (High)": "gemini-4-carbon-high",
+        "Gemini 4 Carbon (Medium)": "gemini-4-carbon-medium",
+        "Gemini 4 Carbon (Low)": "gemini-4-carbon-low",
+        "Gemini 4 Argon": "gemini-4-argon-high",
+        "Gemini 4 Argon (High)": "gemini-4-argon-high",
+        "Gemini 4 Argon (Medium)": "gemini-4-argon-medium",
+        "Gemini 4 Argon (Low)": "gemini-4-argon-low",
+        "Gemini 4 Hydrogen": "gemini-4-hydrogen-high",
+        "Gemini 4 Hydrogen (XHigh)": "gemini-4-hydrogen-xhigh",
+        "Gemini 4 Hydrogen (High)": "gemini-4-hydrogen-high",
+        "Gemini 4 Hydrogen (Medium)": "gemini-4-hydrogen-medium",
+        "Gemini 4 Hydrogen (Low)": "gemini-4-hydrogen-low",
+        "Claude Opus 5.5": "claude-opus-5-5-high",
+        "Claude Opus 5.5 (High)": "claude-opus-5-5-high",
+        "Claude Opus 5.5 (Medium)": "claude-opus-5-5-medium",
+        "  claude  opus  5.5  ( low ) ": "claude-opus-5-5-low",
+        "Claude Sonnet 5.5": "claude-sonnet-5-5-high",
+        "Claude Sonnet 5.5 (High)": "claude-sonnet-5-5-high",
+        "Claude Sonnet 5.5 (Medium)": "claude-sonnet-5-5-medium",
+        "Claude Sonnet 5.5 (Low)": "claude-sonnet-5-5-low",
+        "GPT-OSS 120B": "gpt-oss-120b-medium",
+        "GPT-OSS 120B (Medium)": "gpt-oss-120b-medium",
+        "fake": "fake",
+        "future-model-id": "future-model-id",
+    }
+    bad_aliases = {k: (v, worker_mod.resolve_agy_model(k))
+                   for k, v in expected_aliases.items() if worker_mod.resolve_agy_model(k) != v}
+    check("resolve_agy_model maps all 8 families / 19 variants and passes unknown names through",
+          not bad_aliases, json.dumps(bad_aliases))
+
+    rev_args = os.path.join(TMP, "review_args.txt")
+    fake_agy(f"printf '%s\\n' \"$@\" > {shlex.quote(rev_args)}",
+             response={"status": "SUCCESS", "response": "Review Verdict: Acceptable (opus)"})
+    r = sh(*W, "review", rid, "--model", "Claude Opus 5.5", "--json", check=False, env=env)
+    rev_out = json.loads(r.stdout) if r.returncode == 0 else {}
+    rev_saved = json.load(open(agy_review_path)) if os.path.isfile(agy_review_path) else {}
+    rev_argv = open(rev_args).read().splitlines() if os.path.isfile(rev_args) else []
+    check("review --model 'Claude Opus 5.5' resolves alias and selects executor=agy",
+          r.returncode == 0
+          and rev_out.get("executor") == "agy"
+          and rev_out.get("model") == "claude-opus-5-5-high"
+          and rev_saved.get("executor") == "agy"
+          and rev_saved.get("model") == "claude-opus-5-5-high"
+          and "--model" in rev_argv and "claude-opus-5-5-high" in rev_argv,
+          r.stderr + r.stdout)
+
+    run_args = os.path.join(TMP, "run_args.txt")
+    fake_agy(f"printf '%s\\n' \"$@\" > {shlex.quote(run_args)}; echo r >> app.py")
+    r = sh(*W, "run", "--repo", REPO, "--brief", os.path.join(TMP, "brief.md"),
+           "--model", "Gemini 4 Hydrogen (XHigh)", "--name", "alias-run", "--timeout", "60", env=env, check=False)
+    alias_run = json.loads(r.stdout) if r.returncode == 0 else {}
+    if alias_run.get("run"):
+        CREATED.append(alias_run["run"])
+    alias_meta = (json.load(open(os.path.join(DIR, "runs", alias_run["run"], "meta.json")))
+                  if alias_run.get("run") else {})
+    run_argv = open(run_args).read().splitlines() if os.path.isfile(run_args) else []
+    check("run resolves display-name alias before storing meta and invoking agy",
+          r.returncode == 0
+          and alias_meta.get("model") == "gemini-4-hydrogen-xhigh"
+          and "--model" in run_argv and "gemini-4-hydrogen-xhigh" in run_argv,
+          r.stderr + r.stdout)
 
     for rid in CREATED:
         sh(*W, "clean", rid, check=False)

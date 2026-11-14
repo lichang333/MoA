@@ -30,10 +30,13 @@ class InstallTests(unittest.TestCase):
                  "timeout": 15}]}]}}))
         self.write("skills/moa/.env.example", "EXAMPLE_API_KEY=\n")
         self.write("skills/auto/agy_guard.py", "#!/usr/bin/env python3\n")
-        for platform in ("codex", "claude", "gemini"):
-            for skill in ("moa", "auto"):
+        for platform in ("codex", "claude", "gemini", "opencode"):
+            skills = ("moa", "auto", "swarm") if platform == "opencode" else ("moa", "auto")
+            for skill in skills:
                 self.write(f"platforms/{platform}/skills/{skill}/SKILL.md",
                            f"{platform}: {skill}\n")
+        self.write("platforms/opencode/agents/swarm.md",
+                   "---\ndescription: swarm\nmode: primary\n---\nswarm\n")
 
     def write(self, relative, content, home=False):
         path = (self.user_home if home else self.repo) / relative
@@ -68,17 +71,29 @@ class InstallTests(unittest.TestCase):
             (shared / ".env").chmod(0o600)
         (shared / "runs").mkdir()
         (shared / "runs/history.json").write_text('{"old": true}\n')
-        directory = ".agents" if platform == "codex" else ".claude" if platform == "claude" else ".gemini/config"
+        directory = (".agents" if platform == "codex"
+                     else ".claude" if platform == "claude"
+                     else ".config/opencode" if platform == "opencode"
+                     else ".gemini/config")
         self.link(f"{directory}/skills/moa", shared)
         return shared
 
     def assert_installed(self, platform):
-        directory = ".agents" if platform == "codex" else ".claude" if platform == "claude" else ".gemini/config"
-        for skill in ("moa", "auto"):
+        directory = (".agents" if platform == "codex"
+                     else ".claude" if platform == "claude"
+                     else ".config/opencode" if platform == "opencode"
+                     else ".gemini/config")
+        skills = ("moa", "auto", "swarm") if platform == "opencode" else ("moa", "auto")
+        for skill in skills:
             path = self.user_home / directory / "skills" / skill
             self.assertTrue(path.is_symlink())
             self.assertEqual(os.readlink(path), str(self.repo / "platforms" / platform /
                                                    "skills" / skill))
+        if platform == "opencode":
+            agent_path = self.user_home / ".config/opencode/agents/swarm.md"
+            self.assertTrue(agent_path.is_symlink())
+            self.assertEqual(os.readlink(agent_path),
+                             str(self.repo / "platforms/opencode/agents/swarm.md"))
 
     def hooks(self):
         return json.loads((self.user_home / ".gemini/config/hooks.json").read_text())
@@ -103,6 +118,7 @@ class InstallTests(unittest.TestCase):
         self.assert_installed("codex")
         self.assert_installed("claude")
         self.assert_installed("gemini")
+        self.assert_installed("opencode")
         hook = self.hooks()[HOOK_KEY]["PreToolUse"][0]["hooks"][0]
         self.assertEqual(shlex.split(hook["command"]),
                          [str(self.repo / "skills/auto/agy_guard.py")])
@@ -114,6 +130,8 @@ class InstallTests(unittest.TestCase):
         self.assert_installed("codex")
         self.assertFalse((self.user_home / ".claude").exists())
         self.assertFalse((self.user_home / ".gemini/config/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/agents").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
     def test_claude_only_does_not_install_others(self):
@@ -121,6 +139,8 @@ class InstallTests(unittest.TestCase):
         self.assert_installed("claude")
         self.assertFalse((self.user_home / ".agents").exists())
         self.assertFalse((self.user_home / ".gemini/config/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/agents").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
     def test_gemini_only_does_not_install_others(self):
@@ -128,6 +148,8 @@ class InstallTests(unittest.TestCase):
         self.assert_installed("gemini")
         self.assertFalse((self.user_home / ".agents").exists())
         self.assertFalse((self.user_home / ".claude").exists())
+        self.assertFalse((self.user_home / ".config/opencode/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/agents").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
     def test_agy_alias_installs_gemini(self):
@@ -135,6 +157,16 @@ class InstallTests(unittest.TestCase):
         self.assert_installed("gemini")
         self.assertFalse((self.user_home / ".agents").exists())
         self.assertFalse((self.user_home / ".claude").exists())
+        self.assertFalse((self.user_home / ".config/opencode/skills").exists())
+        self.assertFalse((self.user_home / ".config/opencode/agents").exists())
+        self.assertIn(HOOK_KEY, self.hooks())
+
+    def test_opencode_only_installs_moa_auto_and_swarm(self):
+        self.invoke("--platform", "opencode")
+        self.assert_installed("opencode")
+        self.assertFalse((self.user_home / ".agents").exists())
+        self.assertFalse((self.user_home / ".claude").exists())
+        self.assertFalse((self.user_home / ".gemini/config/skills").exists())
         self.assertIn(HOOK_KEY, self.hooks())
 
     def test_legacy_shared_install_is_migrated_with_backups(self):
@@ -292,6 +324,21 @@ class InstallTests(unittest.TestCase):
         before = self.snapshot()
         self.invoke("--platform", "unknown", success=False)
         self.assertEqual(before, self.snapshot())
+
+    def test_opencode_agent_conflict_is_backed_up(self):
+        self.write(".config/opencode/agents/swarm.md", "existing swarm agent", home=True)
+        self.invoke("--platform", "opencode")
+        self.assert_installed("opencode")
+        saved = {path.name: path for path in self.backups()}
+        self.assertEqual(saved[".config_opencode_agents_swarm.md"].read_text(),
+                         "existing swarm agent")
+
+    def test_missing_opencode_agent_fails_preflight(self):
+        (self.repo / "platforms/opencode/agents/swarm.md").unlink()
+        before = self.snapshot()
+        result = self.invoke("--platform", "opencode", success=False)
+        self.assertEqual(before, self.snapshot())
+        self.assertIn("missing agent entry point", result.stderr)
 
 
 if __name__ == "__main__":

@@ -10,12 +10,16 @@ It defines the isolation, review, verification and apply gates. The current Anti
 task; [routing](routing.json) supplies model roles.
 
 Route execution and review separately using the shared workflow's review criteria.
-Start with `native_roles.reviewer` from [routing](routing.json); for complex architecture use the configured planner (`gemini-3.8-pro`).
+Start with `native_roles.reviewer` from [routing](routing.json); for complex architecture use the configured planner (`gemini-pro-orchestrator`).
 Use Antigravity's subagent tools (`invoke_subagent`) with an explicit model and a bounded brief.
 The current Antigravity coordinator dispatches, resolves findings, performs runtime checks and integrates the result.
 
 Choose the executor using the shared workflow's task-fit criteria and the user's
-funding preference. Model defaults are starting candidates; assess uncertainty,
+funding preference. Unless the user explicitly overrides a model, the coordinator
+automatically selects the right worker model and cross-family reviewer from the 8 active
+families / 19 variants in `agy_catalog` (`python3 "$W" models`, excluding retired
+`gemini-3.8`; UI display names are auto-resolved), failing over across quota/RPM pools
+when needed. Model defaults are starting candidates; assess uncertainty,
 failure impact and likely rework before each dispatch.
 For local agy execution, `agy_worker.py` runs an isolated child worker in a separate Git worktree under macOS sandbox:
 

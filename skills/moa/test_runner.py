@@ -93,7 +93,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(call.call_count, 1)
 
     def test_explicit_selection_does_not_call_other_configured_providers(self):
-        os.environ.update(DEEPSEEK_API_KEY="deepseek-test-key", OPENAI_API_KEY="openai-test-key")
+        os.environ.update(DEEPSEEK_API_KEY="deepseek-test-key", MINIMAX_API_KEY="minimax-test-key")
         code, _, _, call = self.invoke(["--models", "deepseek,deepseek", "question"])
         self.assertEqual(code, 0)
         self.assertEqual(call.call_count, 2)
@@ -102,9 +102,9 @@ class RunnerTests(unittest.TestCase):
 
     def test_explicit_missing_key_fails_before_any_model_call(self):
         os.environ["DEEPSEEK_API_KEY"] = "synthetic-key"
-        code, _, stderr, call = self.invoke(["--models", "deepseek,openai", "--raw", "question"])
+        code, _, stderr, call = self.invoke(["--models", "deepseek,minimax", "--raw", "question"])
         self.assertNotEqual(code, 0)
-        self.assertIn("Selected providers lack API keys: openai", stderr)
+        self.assertIn("Selected providers lack API keys: minimax", stderr)
         call.assert_not_called()
         self.assertEqual(self.record()["status"], "failed")
 
@@ -118,9 +118,9 @@ class RunnerTests(unittest.TestCase):
         self.network.assert_not_called()
 
     def test_mixed_failure_is_excluded_from_raw_and_recorded(self):
-        os.environ.update(DEEPSEEK_API_KEY="test-ds", OPENAI_API_KEY="test-openai")
+        os.environ.update(DEEPSEEK_API_KEY="test-ds", MINIMAX_API_KEY="test-minimax")
         def answer(provider, *args):
-            if provider == "openai":
+            if provider == "minimax":
                 raise ValueError("rejected")
             return "usable answer"
         code, stdout, stderr, _ = self.invoke(["--platform", "codex", "question"], side_effect=answer)
@@ -129,10 +129,10 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("Partial failure", stderr)
         record = self.record()
         self.assertEqual(record["status"], "partial_success")
-        self.assertEqual(record["worker_results"]["openai"]["status"], "failed")
+        self.assertEqual(record["worker_results"]["minimax"]["status"], "failed")
 
     def test_mixed_failure_is_excluded_from_aggregation(self):
-        os.environ.update(DEEPSEEK_API_KEY="test-ds", OPENAI_API_KEY="test-openai")
+        os.environ.update(DEEPSEEK_API_KEY="test-ds", MINIMAX_API_KEY="test-minimax")
         def answer(provider, prompt, api_key, model, system, max_tokens):
             if system and system.startswith("You are the Aggregator"):
                 payload = json.loads(prompt)
@@ -141,7 +141,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertIn(runner.COMMON_RULES, system)
                 self.assertNotIn("usable answer", system)
                 return "final answer"
-            if provider == "openai":
+            if provider == "minimax":
                 raise ValueError("bad worker response")
             return "usable answer"
         code, stdout, _, call = self.invoke(["question"], side_effect=answer)
@@ -171,8 +171,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.record()["reviewer_result"]["status"], "success")
 
     def test_independent_workers_receive_only_task_and_shared_rules(self):
-        os.environ.update(DEEPSEEK_API_KEY="synthetic-ds", OPENAI_API_KEY="synthetic-openai")
-        code, stdout, _, call = self.invoke(["--platform", "codex", "--models", "deepseek,openai", "original task"])
+        os.environ.update(DEEPSEEK_API_KEY="synthetic-ds", MINIMAX_API_KEY="synthetic-minimax")
+        code, stdout, _, call = self.invoke(["--platform", "codex", "--models", "deepseek,minimax", "original task"])
         self.assertEqual(code, 0)
         self.assertEqual(call.call_count, 2)
         for item in call.call_args_list:
@@ -225,7 +225,7 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("synthetic-private-key", serialized)
 
     def test_error_messages_redact_transport_key(self):
-        os.environ["GEMINI_API_KEY"] = "synthetic-private-key"
+        os.environ["DEEPSEEK_API_KEY"] = "synthetic-private-key"
         code, _, stderr, _ = self.invoke(["--raw", "question"], side_effect=ValueError(
             "https://example.invalid?key=synthetic-private-key"))
         self.assertNotEqual(code, 0)
@@ -262,7 +262,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_platform_entrypoints_infer_raw_without_platform_argument(self):
         repo = runner.SKILL_DIR.parent.parent
-        for platform in ("codex", "claude", "gemini"):
+        for platform in ("codex", "claude", "gemini", "opencode"):
             platform_dir = repo / "platforms" / platform / "skills" / "moa"
             installed = self.root / platform / ".agents" / "skills" / "moa"
             installed.parent.mkdir(parents=True)
@@ -283,6 +283,7 @@ class RunnerTests(unittest.TestCase):
             (repo / "platforms/codex/skills/moa/moa_runner.py", ["--platform", "headless"], "headless", "aggregate"),
             (repo / "platforms/claude/skills/moa/moa_runner.py", ["--platform", "codex"], "codex", "raw"),
             (repo / "platforms/gemini/skills/moa/moa_runner.py", ["--platform", "gemini"], "gemini", "raw"),
+            (repo / "platforms/opencode/skills/moa/moa_runner.py", ["--platform", "opencode"], "opencode", "raw"),
             (runner.SKILL_DIR / "moa_runner.py", ["--platform", "claude"], "claude", "raw"),
         ]
         for entry, flags, platform, mode in cases:
@@ -299,18 +300,23 @@ class RunnerTests(unittest.TestCase):
         shutil.copytree(runner.CONFIG_DIR, config_dir)
         path = config_dir / "codex.json"
         config = runner.load_config("codex")
-        config["providers"]["openai"]["model"] = "gpt-6-astra"
+        config["providers"]["deepseek"]["model"] = "deepseek-reasoner"
         path.write_text(json.dumps(config))
         with patch.object(runner, "CONFIG_DIR", config_dir):
-            self.assertEqual(runner.load_config("codex")["providers"]["openai"]["model"], "gpt-6-astra")
+            self.assertEqual(runner.load_config("codex")["providers"]["deepseek"]["model"], "deepseek-reasoner")
             path.write_text(json.dumps({"extends": "codex.json"}))
             with self.assertRaisesRegex(ValueError, "circular"):
                 runner.load_config("codex")
 
     def test_adapter_payloads_use_configured_models_without_network(self):
-        providers = runner.load_config("headless")["providers"]
+        providers = dict(runner.load_config("headless")["providers"])
+        providers.update({
+            "openai": {"model": "synthetic-openai"},
+            "anthropic": {"model": "synthetic-anthropic"},
+            "gemini": {"model": "synthetic-gemini"},
+        })
         for provider, settings in providers.items():
-            if provider == "codex":
+            if provider in ("agy", "codex"):
                 continue
             with self.subTest(provider=provider):
                 if provider == "gemini":
@@ -341,8 +347,65 @@ class RunnerTests(unittest.TestCase):
                             {"role": "user", "content": "question"},
                         ])
 
+    def test_agy_adapter_calls_cli_in_plan_mode_without_network(self):
+        settings = runner.load_config("headless")["providers"]["agy"]
+        self.assertEqual(settings["model"], "gemini-pro-orchestrator")
+        self.assertEqual(settings["display_name"], "Orchestrator (Carbon)")
+
+        def fake_run(cmd, cwd=None, env=None, text=True, capture_output=True, timeout=None):
+            self.assertIn("-p", cmd)
+            self.assertIn("--model", cmd)
+            self.assertEqual(cmd[cmd.index("--model") + 1], "gemini-pro-orchestrator")
+            self.assertIn("--mode", cmd)
+            self.assertEqual(cmd[cmd.index("--mode") + 1], "plan")
+            self.assertIn("--disable-slash-commands", cmd)
+            self.assertIn("--output-format", cmd)
+            self.assertEqual(cmd[cmd.index("--output-format") + 1], "json")
+            self.assertTrue(cwd and Path(cwd).is_dir())
+            self.assertNotIn("AUTO_WORKER", env)
+            self.assertNotIn("DEEPSEEK_API_KEY", env)
+            prompt_arg = cmd[cmd.index("-p") + 1]
+            self.assertIn(runner.WORKER_RULES, prompt_arg)
+            self.assertIn("question", prompt_arg)
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout=json.dumps({"status": "SUCCESS", "response": "agy carbon answer"}) + "\n",
+                stderr=""
+            )
+
+        os.environ["DEEPSEEK_API_KEY"] = "secret-must-not-leak"
+        with patch.object(runner, "agy_executable", return_value="/usr/local/bin/agy"), \
+                patch.object(runner.shutil, "which", return_value=None), \
+                patch.object(runner.subprocess, "run", side_effect=fake_run) as mock_sub:
+            answer = runner.call_model("agy", "question", "installed", settings["model"],
+                                       system_prompt=runner.WORKER_RULES)
+            self.assertEqual(answer, "agy carbon answer")
+            mock_sub.assert_called_once()
+
+        def fail_run(cmd, cwd=None, env=None, text=True, capture_output=True, timeout=None):
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout=json.dumps({"status": "ERROR", "error": "quota reached"}) + "\n",
+                stderr=""
+            )
+
+        with patch.object(runner, "agy_executable", return_value="/usr/local/bin/agy"), \
+                patch.object(runner.shutil, "which", return_value=None), \
+                patch.object(runner.subprocess, "run", side_effect=fail_run):
+            with self.assertRaisesRegex(RuntimeError, "quota reached"):
+                runner.call_model("agy", "question", "installed", settings["model"])
+
+    def test_opencode_profile_uses_agy_orchestrator_and_skips_glm_self_vote(self):
+        cfg = runner.load_config("opencode")
+        self.assertEqual(cfg["mode"], "raw")
+        self.assertEqual(cfg["worker_defaults"], ["agy", "deepseek", "minimax"])
+        self.assertEqual(cfg["reviewer"]["provider"], "agy")
+        self.assertEqual(cfg["reviewer"]["model"], "gemini-pro-orchestrator")
+        self.assertEqual(cfg["agy_routes"]["l1"], "gemini-4-carbon-high")
+        self.assertEqual(cfg["agy_routes"]["l3"], ["gemini-pro-orchestrator", "gemini-4-carbon-high"])
+
     def test_codex_adapter_calls_cli_without_network(self):
-        settings = runner.load_config("headless")["providers"]["codex"]
+        codex_model = "gpt-6-astra"
         def fake_run(cmd, input=None, text=True, capture_output=True, timeout=None):
             out_idx = cmd.index("-o") + 1
             out_file = cmd[out_idx]
@@ -350,7 +413,7 @@ class RunnerTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         with patch.object(runner.subprocess, "run", side_effect=fake_run) as mock_sub:
-            answer = runner.call_model("codex", "question", "synthetic-key", settings["model"],
+            answer = runner.call_model("codex", "question", "synthetic-key", codex_model,
                                        system_prompt=runner.WORKER_RULES)
             self.assertEqual(answer, "codex answer")
             mock_sub.assert_called_once()
@@ -358,7 +421,7 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("codex", cmd[0])
             self.assertIn("exec", cmd)
             self.assertIn("-m", cmd)
-            self.assertIn(settings["model"], cmd)
+            self.assertIn(codex_model, cmd)
             self.assertIn(runner.WORKER_RULES, kwargs["input"])
             self.assertIn("question", kwargs["input"])
 

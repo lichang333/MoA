@@ -1,0 +1,17 @@
+{
+  "extends": "headless.json",
+  "mode": "raw",
+  "native_roles": {
+    "coordinator": "current",
+    "planner": "gemini-pro-orchestrator",
+    "reviewer": "gemini-pro-orchestrator",
+    "implementer": "gemini-4-carbon-high",
+    "explorer": "explore"
+  },
+  "worker_defaults": ["agy", "deepseek", "minimax"],
+  "reviewer": {
+    "provider": "agy",
+    "model": "gemini-pro-orchestrator",
+    "display_name": "Orchestrator (Carbon)"
+  }
+}

@@ -16,8 +16,8 @@ import tempfile
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Install MoA skills for Codex, Claude, and Gemini (agy).")
-    parser.add_argument("--platform", choices=("codex", "claude", "gemini", "all"), default="all",
+    parser = argparse.ArgumentParser(description="Install MoA skills for Codex, Claude, Gemini (agy), and OpenCode.")
+    parser.add_argument("--platform", choices=("codex", "claude", "gemini", "agy", "opencode", "all"), default="all",
                         help="which platform to install (default: all)")
     parser.add_argument("--dry-run", action="store_true",
                         help="preview changes without writing files or reading API keys")
@@ -26,26 +26,39 @@ def main():
     user_home = Path.home()
     destinations = {"codex": user_home / ".agents/skills",
                     "claude": user_home / ".claude/skills",
-                    "gemini": user_home / ".gemini/config/skills"}
-    platforms = tuple(destinations) if args.platform == "all" else (args.platform,)
-    links = [(repo / "platforms" / platform / "skills" / skill,
-              destinations[platform] / skill)
-             for platform in platforms for skill in ("moa", "auto")]
+                    "gemini": user_home / ".gemini/config/skills",
+                    "opencode": user_home / ".config/opencode/skills"}
+    platform_skills = {"codex": ("moa", "auto"),
+                       "claude": ("moa", "auto"),
+                       "gemini": ("moa", "auto"),
+                       "opencode": ("moa", "auto", "swarm")}
+    selected = "gemini" if args.platform == "agy" else args.platform
+    platforms = tuple(destinations) if selected == "all" else (selected,)
+    skill_links = [(repo / "platforms" / platform / "skills" / skill,
+                    destinations[platform] / skill)
+                   for platform in platforms for skill in platform_skills[platform]]
+    agent_links = ([(repo / "platforms/opencode/agents/swarm.md",
+                     user_home / ".config/opencode/agents/swarm.md")]
+                   if "opencode" in platforms else [])
 
     # Detach the old Claude -> Codex link before Codex gets its own entry point.
     # Only this recognized legacy chain is migrated when Claude was not selected.
     legacy_claude = destinations["claude"] / "moa"
-    if args.platform == "codex" and legacy_claude.is_symlink():
+    if selected == "codex" and legacy_claude.is_symlink():
         old_target = Path(os.path.abspath(legacy_claude.parent / os.readlink(legacy_claude)))
         if old_target == destinations["codex"] / "moa":
-            links.insert(0, (repo / "platforms/claude/skills/moa", legacy_claude))
+            skill_links.insert(0, (repo / "platforms/claude/skills/moa", legacy_claude))
             print("migration: detach legacy Claude -> Codex shared skill link")
 
     # Complete the read-only preflight before making any changes. In particular,
     # never replace a malformed hook config or partially install around it.
-    for target, _ in links:
+    for target, _ in skill_links:
         if not (target / "SKILL.md").is_file():
             raise ValueError(f"missing skill entry point: {target / 'SKILL.md'}")
+    for target, _ in agent_links:
+        if not target.is_file():
+            raise ValueError(f"missing agent entry point: {target}")
+    links = skill_links + agent_links
     guard = repo / "skills/auto/agy_guard.py"
     if not guard.is_file():
         raise ValueError(f"missing worker guard: {guard}")
@@ -128,7 +141,7 @@ def main():
             print(f"would link {path} -> {target}")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.symlink_to(target, target_is_directory=True)
+            path.symlink_to(target, target_is_directory=target.is_dir())
             print(f"linked  {path} -> {target}")
 
     if merged_hooks == current_hooks:

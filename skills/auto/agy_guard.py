@@ -41,7 +41,7 @@ WRITE_TOOLS = {"write_to_file", "replace_file_content", "multi_replace_file_cont
 # Compared case- and normalization-insensitively: APFS is
 # case-insensitive, so ".GIT" IS ".git" (a rewritten .git pointer file would hijack every
 # host-side git command run in the worktree).
-PROTECTED_DIRS = {".git", ".claude", ".codex", ".agents", ".agent", "_agents", "_agent",
+PROTECTED_DIRS = {".git", ".claude", ".codex", ".opencode", ".agents", ".agent", "_agents", "_agent",
                   ".gemini", ".github", ".vscode", ".idea", "venv", ".venv", "node_modules"}
 PROTECTED_NAMES = {"agents.md", "gemini.md", "claude.md", ".git", ".gitmodules", ".gitignore",
                    ".gitattributes", ".envrc", ".flaskenv", ".pre-commit-config.yaml",

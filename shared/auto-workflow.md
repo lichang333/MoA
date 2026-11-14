@@ -105,11 +105,15 @@ guard or sandbox still stay with the coordinator.
 Choose execution and independent review separately: L0 keeps implementation or
 operations with the coordinator, but does not exempt the result from review.
 Announce the execution level/model and the review route (or brief skip reason).
-User model choices take priority when the executor supports them.
+User model choices take priority when the executor supports them; when the user does
+not specify a model, the coordinator automatically selects an eligible task-fit worker
+model and a cross-family reviewer from `agy_catalog` in `headless.json` (8 active
+families / 19 variants excluding retired `gemini-3.8`; inspect via `python3 "$W" models`)
+without asking the user to pick one.
 Read `routing.json` and its shared defaults, `headless.json`
 (installed next to the skill; source is `config/headless.json`),
-for `agy_routes` and `agy_alternatives`; `agy models` can confirm external
-executor availability. Do not substitute an OpenAI model ID into the agy CLI.
+for `agy_catalog`, `agy_routes` and `agy_alternatives`; `agy models` can confirm live
+executor availability (UI display names are auto-resolved by `agy_worker.py`). Do not substitute an OpenAI model ID into the agy CLI.
 
 Write a brief containing `GOAL`, `CONTEXT` (files/functions), `REQUIREMENTS`,
 `CONSTRAINTS`, `ACCEPTANCE` (exact checks), and `OUT OF SCOPE`. Distinct tasks need
@@ -349,17 +353,16 @@ or enables a paid API fallback. A failed historical run is not retried on startu
 ## Integrate and record
 
 ```bash
-python3 "$W" review '<run-id>' --model gpt-6-astra
+python3 "$W" review '<run-id>' --executor agy --model gemini-pro-orchestrator
 python3 "$W" apply '<run-id>' --sha '<reviewed-sha256>'
 python3 "$W" record '<run-id>' --level L2 --outcome accepted \
   --notes '<review and verification summary>'
 python3 "$W" clean '<run-id>'
 ```
 
-`review` invokes the local `codex exec` in a read-only sandbox using the user's
-logged-in ChatGPT subscription (`gpt-6-astra` by default) to evaluate the generated
+`review` defaults to `codex exec` for legacy callers, or runs read-only `--mode plan` via `agy` (`--executor agy`, default `gemini-pro-orchestrator`) on Google AI Ultra to evaluate the generated
 patch against the brief. It checks for correctness, edge cases, regression risks and
-safety issues, printing the review and saving it to `runs/<id>/codex_review.json`.
+safety issues, printing the review and saving it to `runs/<id>/agy_review.json` (or `codex_review.json` for `codex`).
 
 Apply changes the working tree without staging. Commit, push, PR and deployment
 follow the user's requested scope and standing authorization. Coordinator edits
