@@ -24,6 +24,7 @@ SKILL_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = SKILL_DIR.parent.parent / "config"
 RUNS_DIR = SKILL_DIR / "runs"
 KEY_NAMES = {
+    "agy": ("AGY_CLI", "AGY_AUTH"),
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "glm": ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY"),
@@ -98,6 +99,14 @@ def env_paths():
     return (SKILL_DIR / ".env", Path.home() / "Desktop" / "moa_keys.env")
 
 
+def agy_executable():
+    found = shutil.which("agy")
+    if found:
+        return found
+    fallback = Path.home() / ".local" / "bin" / "agy"
+    return str(fallback) if fallback.is_file() else None
+
+
 def load_env():
     # Resolve symlinks to share one key file. Environment > local file > Desktop fallback.
     for path in env_paths():
@@ -111,6 +120,8 @@ def load_env():
                 if value and "your_" not in value:
                     if not os.environ.get(key.strip()):
                         os.environ[key.strip()] = value
+    if agy_executable() and not os.environ.get("AGY_CLI"):
+        os.environ["AGY_CLI"] = "installed"
     if shutil.which("codex") and not os.environ.get("CODEX_CLI"):
         os.environ["CODEX_CLI"] = "installed"
 
@@ -123,6 +134,48 @@ def call_model(provider, prompt, api_key, model, system_prompt=None, max_tokens=
     """Only external providers reach this adapter; native role IDs are never dispatched."""
     if provider not in KEY_NAMES:
         raise ValueError(f"Unknown external API provider: {provider}")
+    if provider == "agy":
+        agy_bin = agy_executable() or "agy"
+        cmd_prefix = (["dbus-run-session", "--", agy_bin]
+                      if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and shutil.which("dbus-run-session")
+                      else [agy_bin])
+        full_prompt = (f"<system_instructions>\n{system_prompt}\n</system_instructions>\n\n{prompt}"
+                       if system_prompt else prompt)
+        eff_timeout = max(timeout, 180)
+        safe_env = {k: os.environ[k] for k in ("PATH", "HOME", "USER", "LOGNAME", "SHELL",
+                                               "LANG", "TERM", "TMPDIR", "DBUS_SESSION_BUS_ADDRESS")
+                    if k in os.environ}
+        local_bin = str(Path.home() / ".local" / "bin")
+        path_val = safe_env.get("PATH", "")
+        if local_bin not in path_val.split(os.pathsep):
+            safe_env["PATH"] = f"{local_bin}{os.pathsep}{path_val}" if path_val else local_bin
+        with tempfile.TemporaryDirectory(prefix="moa-agy-") as tmp_cwd:
+            cmd = [
+                *cmd_prefix, "-p", full_prompt,
+                "--model", model or "gemini-pro-orchestrator",
+                "--mode", "plan",
+                "--disable-slash-commands",
+                "--output-format", "json",
+                "--print-timeout", f"{eff_timeout}s",
+            ]
+            proc = subprocess.run(cmd, cwd=tmp_cwd, env=safe_env, text=True,
+                                  capture_output=True, timeout=eff_timeout + 30)
+        resp = {}
+        for line in reversed((proc.stdout or "").strip().splitlines()):
+            try:
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    resp = parsed
+                    break
+            except ValueError:
+                continue
+        if proc.returncode != 0 or (resp and resp.get("status") and resp.get("status") != "SUCCESS"):
+            detail = (resp.get("error") if isinstance(resp.get("error"), str) else None) or proc.stderr or proc.stdout or ""
+            raise RuntimeError(f"agy failed (exit {proc.returncode}): {detail.strip()[:1000]}")
+        content = resp.get("response") if resp else proc.stdout
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Empty or invalid model response from agy")
+        return content.strip()
     if provider == "codex":
         codex_bin = shutil.which("codex") or "codex"
         full_prompt = prompt
@@ -282,7 +335,7 @@ def default_platform():
     # Resolve directory symlinks (installed skills), but preserve the script's
     # entrypoint directory: resolving the file itself would erase the platform.
     entry_dir = Path(__file__).absolute().parent.resolve()
-    for platform in ("codex", "claude", "gemini"):
+    for platform in ("codex", "claude", "gemini", "opencode"):
         if entry_dir == SKILL_DIR.parent.parent / "platforms" / platform / "skills" / "moa":
             return platform
     return "headless"
@@ -291,11 +344,11 @@ def default_platform():
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("prompt", nargs="?")
-    result.add_argument("--platform", choices=("codex", "claude", "gemini", "headless"), default=default_platform(),
+    result.add_argument("--platform", choices=("codex", "claude", "gemini", "opencode", "headless"), default=default_platform(),
                         help="Defaults to the platform entrypoint, or headless for the shared script")
     result.add_argument("--coordinator-model", default="current", help="Session model metadata; never an API provider")
     result.add_argument("--task-id")
-    result.add_argument("--models", help="Comma-separated external providers, e.g. deepseek,gemini")
+    result.add_argument("--models", help="Comma-separated external providers, e.g. agy,deepseek,minimax")
     result.add_argument("--raw", action="store_true", help="Return worker JSON without an API aggregator")
     result.add_argument("--review", "--glm52", dest="review", action="store_true")
     result.add_argument("--cross-review", "--evidence-review", dest="cross_review", action="store_true",

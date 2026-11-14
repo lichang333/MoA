@@ -3,8 +3,9 @@
   "mode": "raw",
   "native_roles": {
     "coordinator": "current",
-    "planner": "gemini-3.8-pro",
-    "reviewer": "gemini-3.8-pro",
-    "explorer": "gemini-3.8-flash"
+    "planner": "gemini-pro-orchestrator",
+    "reviewer": "gemini-pro-orchestrator",
+    "implementer": "gemini-4-carbon-high",
+    "explorer": "gemini-4-argon-low"
   }
 }

@@ -138,6 +138,8 @@ CASES = [
     ("write .Git/config", lambda: run("write_to_file", {"TargetFile": ROOT + "/.Git/config", "CodeContent": "x"}), "deny"),
     ("write Agents.md", lambda: run("write_to_file", {"TargetFile": ROOT + "/Agents.md", "CodeContent": "x"}), "deny"),
     ("write .Claude/settings", lambda: run("write_to_file", {"TargetFile": ROOT + "/.Claude/settings.json", "CodeContent": "{}"}), "deny"),
+    ("write .opencode/config", lambda: run("write_to_file", {"TargetFile": ROOT + "/.opencode/opencode.jsonc", "CodeContent": "{}"}), "deny"),
+    ("write nested .OpenCode", lambda: run("replace_file_content", {"TargetFile": ROOT + "/sub/.OpenCode/skill.md", "ReplacementContent": "x"}), "deny"),
     ("write .GITHUB workflow", lambda: run("write_to_file", {"TargetFile": ROOT + "/.GITHUB/workflows/x.yml", "CodeContent": "x"}), "deny"),
     ("write VENV/", lambda: run("write_to_file", {"TargetFile": ROOT + "/VENV/x", "CodeContent": "x"}), "deny"),
     ("write .ENVRC", lambda: run("write_to_file", {"TargetFile": ROOT + "/.ENVRC", "CodeContent": "x"}), "deny"),

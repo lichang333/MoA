@@ -12,10 +12,12 @@ user's current HEAD, and `apply` has re-checked sha, HEAD, cleanliness and flags
   agy_worker.py resume RUN_ID --brief FILE [--timeout S]       # send-back round, same conversation
   agy_worker.py test   RUN_ID -- CMD [ARGS...]                 # quick sandboxed run in the worker tree
   agy_worker.py verify RUN_ID [--full] [--onto REF] -- CMD ... # patch -> fresh tree -> sandboxed CMD
+  agy_worker.py review RUN_ID [--executor agy|codex] [--model M] [--timeout S] [--json]
   agy_worker.py apply  RUN_ID --sha SHA256 [--allow-protected] [--allow-binary]
   agy_worker.py record RUN_ID --level L1 --outcome accepted|fixed|rejected [--notes TEXT] [--defects a,b]
   agy_worker.py clean  RUN_ID
   agy_worker.py list
+  agy_worker.py models [--json] [--live]                       # list active agy catalog, routes & live status
 
 Host-side git never trusts worker-controlled state: explicit --git-dir, hooks/fsmonitor off,
 attributes read from the empty tree (in-tree .gitattributes ignored), global/system config
@@ -59,7 +61,7 @@ SAFE_GIT = ["-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null", "-c", "co
 ATTR_OFF = [f"--attr-source={EMPTY_TREE}"]
 GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
 # Paths that need Claude's explicit, line-by-line attention (reported in every summary).
-PROTECTED_RE = re.compile(r"(^|/)(\.git|\.claude|\.codex|\.agents?|_agents?|\.gemini|\.github|\.vscode|\.idea|\.?venv|node_modules)(/|$)"
+PROTECTED_RE = re.compile(r"(^|/)(\.git|\.claude|\.codex|\.opencode|\.agents?|_agents?|\.gemini|\.github|\.vscode|\.idea|\.?venv|node_modules)(/|$)"
                           r"|(^|/)(agents\.md|gemini\.md|claude\.md|\.gitmodules|\.gitignore|\.gitattributes|\.envrc"
                           r"|\.flaskenv|\.pre-commit-config\.ya?ml|sitecustomize\.py|usercustomize\.py)$|\.pth$", re.I)
 SENSITIVE_RE = re.compile(r"(^|/)(deploy|node-managers|scripts|migrations)/|^(run\.sh|wsgi\.py|requirements[^/]*\.txt"
@@ -73,7 +75,7 @@ PREAMBLE = """You are a coding worker. Rules for this run (enforced by a guard; 
 - Shell: one simple command per call (no pipes, ;, &&, redirects, $()), read-only tools, git
   status/diff/log/show, `python -m pytest`, `node --test`. No network, no installs, no ssh, no git
   commit/push. If something you need is denied, say so in your final reply instead of working around it.
-- Do not edit AGENTS.md, .gitignore, .gitattributes, .git, .claude, .codex, .agents, .github or venv files.
+- Do not edit AGENTS.md, .gitignore, .gitattributes, .git, .claude, .codex, .opencode, .agents, .github or venv files.
 - Do not leave background processes running when you finish.
 - Finish with a short report: what you changed (files), what you verified (exact test commands and
   results), and anything you were unsure about or could not do.
@@ -94,6 +96,96 @@ POLL_SECONDS = 2.0
 BUSY_SAMPLE_SECONDS = 15.0
 DEFAULT_STALL_SECONDS = 600
 HOOKS_JSON = os.path.join(os.path.expanduser("~"), ".gemini", "config", "hooks.json")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_MODEL_ID_RE = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)+")
+
+
+def load_headless_profile():
+    """Load headless.json beside this entrypoint/symlink first, falling back to ../../config/headless.json."""
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "headless.json"),
+        os.path.join(SKILL_DIR, "headless.json"),
+        os.path.join(SKILL_DIR, "..", "..", "config", "headless.json"),
+    ]
+    seen = set()
+    for path in candidates:
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
+def _build_agy_model_aliases():
+    """Build normalized lookup table from UI display names & family shorthands to canonical agy IDs."""
+    aliases = {
+        "orchestrator": "gemini-pro-orchestrator",
+        "orchestrator carbon": "gemini-pro-orchestrator",
+        "carbon orchestrator": "gemini-pro-orchestrator",
+        "gemini pro orchestrator": "gemini-pro-orchestrator",
+        "gemini pro orchestrator carbon": "gemini-pro-orchestrator",
+        "orchestrator argon": "gemini-pro-orchestrator-argon",
+        "argon orchestrator": "gemini-pro-orchestrator-argon",
+        "gemini pro orchestrator argon": "gemini-pro-orchestrator-argon",
+        "gpt oss": "gpt-oss-120b-medium",
+        "gpt oss 120b": "gpt-oss-120b-medium",
+        "gpt oss 120b medium": "gpt-oss-120b-medium",
+    }
+    tiered = (
+        (("gemini 4 carbon",), "gemini-4-carbon", ("high", "medium", "low"), "high"),
+        (("gemini 4 argon",), "gemini-4-argon", ("high", "medium", "low"), "high"),
+        (("gemini 4 hydrogen",), "gemini-4-hydrogen", ("xhigh", "high", "medium", "low"), "high"),
+        (("claude opus 5 5", "opus 5 5"), "claude-opus-5-5", ("high", "medium", "low"), "high"),
+        (("claude sonnet 5 5", "sonnet 5 5"), "claude-sonnet-5-5", ("high", "medium", "low"), "high"),
+    )
+    for prefixes, canonical_prefix, tiers, default_tier in tiered:
+        for prefix in prefixes:
+            aliases[prefix] = f"{canonical_prefix}-{default_tier}"
+            for tier in tiers:
+                aliases[f"{prefix} {tier}"] = f"{canonical_prefix}-{tier}"
+            if "xhigh" in tiers:
+                aliases[f"{prefix} x high"] = f"{canonical_prefix}-xhigh"
+    return aliases
+
+
+AGY_MODEL_ALIASES = _build_agy_model_aliases()
+
+
+def resolve_agy_model(name):
+    """Normalize UI display names or shorthands into canonical agy model IDs; pass unknown names through."""
+    if not isinstance(name, str) or not name.strip():
+        return name
+    key = re.sub(r"[^a-z0-9]+", " ", name.strip().lower()).strip()
+    return AGY_MODEL_ALIASES.get(key, name)
+
+
+def find_agy_bin():
+    """Locate `agy` on PATH or ~/.local/bin/agy; return path or None."""
+    agy_bin = shutil.which("agy")
+    if agy_bin:
+        return agy_bin
+    fallback = os.path.join(os.path.expanduser("~"), ".local", "bin", "agy")
+    return fallback if os.path.isfile(fallback) else None
+
+
+def agy_cmd_prefix_and_env(agy_bin):
+    """Build command prefix (wrapping dbus-run-session on headless Linux if needed) and safe env."""
+    cmd_prefix = (["dbus-run-session", "--", agy_bin]
+                  if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") and shutil.which("dbus-run-session")
+                  else [agy_bin])
+    env = min_env()
+    bin_dir = os.path.dirname(agy_bin)
+    path_val = env.get("PATH", "")
+    if bin_dir and bin_dir not in path_val.split(os.pathsep):
+        env["PATH"] = f"{bin_dir}{os.pathsep}{path_val}" if path_val else bin_dir
+    return cmd_prefix, env
 
 
 # ---------------------------------------------------------------- helpers
@@ -794,6 +886,7 @@ def invoke(m, brief_file, timeout, conversation=None, network_retries=1, stall_t
 # ---------------------------------------------------------------- commands
 
 def cmd_run(a):
+    model = resolve_agy_model(a.model)
     node_modules = deps_dir(a.node_modules)
     repo = user_git(a.repo, "rev-parse", "--show-toplevel").decode().strip()
     base = user_git(repo, "rev-parse", "--verify", a.base + "^{commit}").decode().strip()
@@ -812,7 +905,7 @@ def cmd_run(a):
             rmtree_tree(wt)   # no record exists yet: leave nothing behind
             shutil.rmtree(os.path.join(RUNS, rid), ignore_errors=True)
             raise
-    m = {"id": rid, "repo": repo, "base": base, "worktree": wt, "model": a.model, "venv": venv,
+    m = {"id": rid, "repo": repo, "base": base, "worktree": wt, "model": model, "venv": venv,
          "node_modules": node_modules,
          "platform": a.platform, "coordinator_model": a.coordinator_model, "task_id": a.task_id, "executor": "agy",
          "created": datetime.datetime.now().isoformat(timespec="seconds"), "rounds": [], "verified": []}
@@ -978,17 +1071,19 @@ def cmd_review(a):
         sys.exit(f"REFUSED: no patch found for run {a.run_id} at {patch_file}")
     with open(patch_file, "r", encoding="utf-8", errors="replace") as f:
         patch_text = f.read()
+
+    requested_model = resolve_agy_model(a.model) if a.model else None
+    executor = a.executor or ("agy" if (requested_model and requested_model.startswith(("gemini-", "claude-", "gpt-oss-"))) else "codex")
+    model = requested_model or ("gemini-pro-orchestrator" if executor == "agy" else "gpt-6-astra")
+
     if not patch_text.strip():
-        out = {"run": a.run_id, "status": "empty_patch", "summary": "Patch is empty (no changes made)."}
+        out = {"run": a.run_id, "executor": executor, "model": model, "status": "empty_patch",
+               "summary": "Patch is empty (no changes made)."}
         if a.json:
             print(json.dumps(out, ensure_ascii=False))
         else:
-            print("Codex Review: Patch is empty (no changes made).")
+            print(f"{executor.capitalize()} Review: Patch is empty (no changes made).")
         return
-
-    codex_bin = shutil.which("codex")
-    if not codex_bin:
-        sys.exit("REFUSED: `codex` command line tool is not found on PATH. Ensure Codex CLI is installed.")
 
     brief_file = os.path.join(RUNS, a.run_id, f"brief-{len(m['rounds'])}.md")
     if not os.path.exists(brief_file):
@@ -1006,46 +1101,83 @@ def cmd_review(a):
         "3. Recommended verification checks before apply\n"
     )
 
-    with tempfile.NamedTemporaryFile(mode="r", delete=False) as out_f:
-        out_path = out_f.name
-
-    try:
-        cmd = [
-            codex_bin, "exec", "--ephemeral", "-s", "read-only",
-            "--color", "never",
-            "-o", out_path,
-            "-m", a.model,
-            "-"
-        ]
-        proc = subprocess.run(cmd, input=review_prompt, text=True, capture_output=True, timeout=a.timeout)
-        if proc.returncode != 0:
-            sys.exit(f"REFUSED: codex review failed (exit {proc.returncode}): {proc.stderr.strip()[:1000]}")
-        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
-            review_text = f.read().strip()
-    finally:
-        if os.path.exists(out_path):
-            with contextlib.suppress(OSError):
-                os.unlink(out_path)
+    if executor == "agy":
+        agy_bin = find_agy_bin()
+        if not agy_bin:
+            sys.exit("REFUSED: `agy` command line tool is not found on PATH or ~/.local/bin/agy.")
+        cmd_prefix, env = agy_cmd_prefix_and_env(agy_bin)
+        with tempfile.TemporaryDirectory(prefix="auto-review-") as tmp_cwd:
+            cmd = [
+                *cmd_prefix, "-p", review_prompt,
+                "--model", model,
+                "--mode", "plan",
+                "--disable-slash-commands",
+                "--output-format", "json",
+                "--print-timeout", f"{a.timeout}s",
+            ]
+            proc = subprocess.run(cmd, cwd=tmp_cwd, env=env, text=True,
+                                  capture_output=True, timeout=a.timeout + 30)
+        resp = {}
+        for line in reversed((proc.stdout or "").strip().splitlines()):
+            with contextlib.suppress(ValueError):
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    resp = parsed
+                    break
+        if proc.returncode != 0 or (resp and resp.get("status") and resp.get("status") != "SUCCESS"):
+            detail = (resp.get("error") if isinstance(resp.get("error"), str) else None) or proc.stderr or proc.stdout or ""
+            sys.exit(f"REFUSED: agy review failed (exit {proc.returncode}): {detail.strip()[:1000]}")
+        review_text = (resp.get("response") if resp else proc.stdout)
+        review_text = review_text.strip() if isinstance(review_text, str) else ""
+        if not review_text:
+            sys.exit("REFUSED: agy review returned empty output.")
+        review_filename, meta_key, banner = "agy_review.json", "agy_review", "AGY"
+    else:
+        codex_bin = shutil.which("codex")
+        if not codex_bin:
+            sys.exit("REFUSED: `codex` command line tool is not found on PATH. Ensure Codex CLI is installed.")
+        with tempfile.NamedTemporaryFile(mode="r", delete=False) as out_f:
+            out_path = out_f.name
+        try:
+            cmd = [
+                codex_bin, "exec", "--ephemeral", "-s", "read-only",
+                "--color", "never",
+                "-o", out_path,
+                "-m", model,
+                "-"
+            ]
+            proc = subprocess.run(cmd, input=review_prompt, text=True, capture_output=True, timeout=a.timeout)
+            if proc.returncode != 0:
+                sys.exit(f"REFUSED: codex review failed (exit {proc.returncode}): {proc.stderr.strip()[:1000]}")
+            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                review_text = f.read().strip()
+        finally:
+            if os.path.exists(out_path):
+                with contextlib.suppress(OSError):
+                    os.unlink(out_path)
+        review_filename, meta_key, banner = "codex_review.json", "codex_review", "CODEX"
 
     review_record = {
         "run": a.run_id,
-        "model": a.model,
+        "executor": executor,
+        "model": model,
         "reviewed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "patch_sha256": hashlib.sha256(patch_text.encode("utf-8")).hexdigest(),
         "review": review_text
     }
-    with open(os.path.join(RUNS, a.run_id, "codex_review.json"), "w", encoding="utf-8") as f:
+    review_path = os.path.join(RUNS, a.run_id, review_filename)
+    with open(review_path, "w", encoding="utf-8") as f:
         json.dump(review_record, f, indent=2, ensure_ascii=False)
 
-    m["codex_review"] = review_record
+    m[meta_key] = review_record
     save(m)
 
     if a.json:
         print(json.dumps(review_record, ensure_ascii=False, indent=2))
     else:
-        print(f"=== CODEX REVIEW FOR {a.run_id} ({a.model}) ===\n")
+        print(f"=== {banner} REVIEW FOR {a.run_id} ({model}) ===\n")
         print(review_text)
-        print(f"\nSaved to {os.path.join(RUNS, a.run_id, 'codex_review.json')}")
+        print(f"\nSaved to {review_path}")
 
 
 def cmd_clean(a):
@@ -1066,6 +1198,105 @@ def cmd_list(_a):
         print(f'{rid}  {m["model"]:24} rounds={len(m["rounds"])}  {live:7} {(m.get("outcome") or {}).get("outcome", "-")}')
 
 
+def _probe_live_agy_models():
+    """Run `agy models` and return [(model_id, display_name), ...]."""
+    agy_bin = find_agy_bin()
+    if not agy_bin:
+        sys.exit("REFUSED: `agy` command line tool is not found on PATH or ~/.local/bin/agy.")
+    cmd_prefix, env = agy_cmd_prefix_and_env(agy_bin)
+    proc = subprocess.run([*cmd_prefix, "models"], env=env, text=True, capture_output=True, timeout=30)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:1000]
+        sys.exit(f"REFUSED: agy models failed (exit {proc.returncode}): {detail}")
+    found, seen = [], set()
+    for raw_line in (proc.stdout or "").splitlines():
+        segment = _ANSI_RE.sub("", raw_line.split("\r")[-1]).strip()
+        if not segment:
+            continue
+        tokens = segment.split(None, 1)
+        mid = tokens[0]
+        if not _MODEL_ID_RE.fullmatch(mid) or mid in seen:
+            continue
+        seen.add(mid)
+        display = tokens[1].strip() if len(tokens) > 1 else ""
+        found.append((mid, display))
+    return found
+
+
+def cmd_models(a):
+    """Display active agy model catalog, routes and alternatives from headless.json (plus optional live check)."""
+    profile = load_headless_profile()
+    families = profile.get("agy_catalog") if isinstance(profile.get("agy_catalog"), list) else []
+    models = []
+    for entry in families:
+        if isinstance(entry, dict):
+            for model_id in entry.get("models") or []:
+                if isinstance(model_id, str) and model_id not in models:
+                    models.append(model_id)
+    agy_routes = profile.get("agy_routes") if isinstance(profile.get("agy_routes"), dict) else {}
+    fallback_routes = profile.get("fallback_routes") if isinstance(profile.get("fallback_routes"), dict) else {}
+    agy_alternatives = profile.get("agy_alternatives") if isinstance(profile.get("agy_alternatives"), dict) else {}
+
+    live_models = None
+    if a.live:
+        catalog_set = set(models)
+        live_models = [
+            {"id": mid, "display_name": display, "in_catalog": mid in catalog_set}
+            for mid, display in _probe_live_agy_models()
+        ]
+
+    if a.json:
+        out = {
+            "families": families,
+            "models": models,
+            "agy_routes": agy_routes,
+            "fallback_routes": fallback_routes,
+            "agy_alternatives": agy_alternatives,
+        }
+        if live_models is not None:
+            out["live_models"] = live_models
+        print(json.dumps(out, indent=2, ensure_ascii=False))
+        return
+
+    print(f"Active agy model catalog ({len(families)} families, {len(models)} models):")
+    if families:
+        live_ids = {item["id"] for item in live_models} if live_models is not None else None
+        rows = []
+        for entry in families:
+            if not isinstance(entry, dict):
+                continue
+            family_name = str(entry.get("family") or "-")
+            tier = str(entry.get("tier") or "-")
+            for model_id in entry.get("models") or []:
+                row = [family_name, tier, str(model_id)]
+                if live_ids is not None:
+                    row.append("yes" if model_id in live_ids else "no")
+                rows.append(row)
+        if rows:
+            headers = ["FAMILY", "TIER", "MODEL ID"] + (["LIVE"] if live_ids is not None else [])
+            widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headers)]
+            fmt = "  ".join(f"{{:{w}}}" for w in widths)
+            print()
+            print(fmt.format(*headers))
+            print(fmt.format(*("-" * w for w in widths)))
+            for row in rows:
+                print(fmt.format(*row))
+    if live_models is not None:
+        extra_live = [item for item in live_models if not item["in_catalog"]]
+        if extra_live:
+            print("\nAdditional live models (not in active catalog):")
+            for item in extra_live:
+                suffix = f" ({item['display_name']})" if item["display_name"] else ""
+                print(f"  - {item['id']}{suffix}")
+    for label, mapping in (("agy_routes", agy_routes), ("fallback_routes", fallback_routes),
+                           ("agy_alternatives", agy_alternatives)):
+        if mapping:
+            print(f"\n{label}:")
+            for k, v in mapping.items():
+                val = ", ".join(v) if isinstance(v, list) else str(v)
+                print(f"  {k}: {val}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -1073,7 +1304,7 @@ def main():
     r.add_argument("--repo", required=True)
     r.add_argument("--brief", required=True)
     r.add_argument("--model", required=True, help="explicit agy model ID from the routing profile (`agy models`)")
-    r.add_argument("--platform", choices=["codex", "claude", "gemini", "headless"], default="claude",
+    r.add_argument("--platform", choices=["codex", "claude", "gemini", "opencode", "headless"], default="claude",
                    help="coordinating platform (executor remains agy)")
     r.add_argument("--coordinator-model", default="current", help="coordinator identity for provenance")
     r.add_argument("--task-id", help="optional task ID from the coordinating platform")
@@ -1116,7 +1347,10 @@ def main():
     r.set_defaults(fn=cmd_apply)
     r = sp.add_parser("review")
     r.add_argument("run_id")
-    r.add_argument("--model", default="gpt-6-astra", help="Codex model for review (default: gpt-6-astra)")
+    r.add_argument("--executor", choices=["agy", "codex"],
+                   help="review CLI backend (agy uses Google AI Ultra subscription)")
+    r.add_argument("--model", default=None,
+                   help="model for review (defaults to gemini-pro-orchestrator for agy, gpt-6-astra for codex)")
     r.add_argument("--timeout", type=int, default=600)
     r.add_argument("--json", action="store_true", help="output JSON review record")
     r.set_defaults(fn=cmd_review)
@@ -1131,6 +1365,10 @@ def main():
     r.add_argument("run_id")
     r.set_defaults(fn=cmd_clean)
     sp.add_parser("list").set_defaults(fn=cmd_list)
+    m = sp.add_parser("models", help="list active agy catalog, routes and alternatives")
+    m.add_argument("--json", action="store_true", help="output JSON catalog and routing data")
+    m.add_argument("--live", action="store_true", help="invoke `agy models` to annotate live availability")
+    m.set_defaults(fn=cmd_models)
 
     argv = sys.argv[1:]
     cmd = argv[argv.index("--") + 1:] if "--" in argv else []   # everything after -- is the command

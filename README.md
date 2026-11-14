@@ -22,14 +22,17 @@ applies; platform folders are symlinks into the shared implementation.
 ## Layout
 
 ```text
-AGENTS.md / CLAUDE.md           platform-specific project entrypoints
-platforms/codex/skills/         Codex moa and auto skill entrypoints
-platforms/claude/skills/        Claude moa and auto skill entrypoints
-shared/                        common project and workflow rules
-config/                        provider defaults and platform routing profiles
-skills/moa/                    shared API runner and offline tests
-skills/auto/                   agy/native Claude executors, cloud bridge, guard, sandbox and tests
-tests/                         installer tests
+AGENTS.md / CLAUDE.md / GEMINI.md  platform-specific project entrypoints
+platforms/codex/skills/            Codex moa and auto skill entrypoints
+platforms/claude/skills/           Claude moa and auto skill entrypoints
+platforms/gemini/skills/           Gemini / Antigravity moa and auto skill entrypoints
+platforms/opencode/skills/         OpenCode moa, auto and swarm skill entrypoints
+platforms/opencode/agents/         OpenCode native primary agents (`swarm.md`)
+shared/                            common project and workflow rules
+config/                            provider defaults and platform routing profiles
+skills/moa/                        shared API/agy runner and offline tests
+skills/auto/                       agy/native Claude executors, cloud bridge, guard, sandbox and tests
+tests/                             installer and platform package tests
 ```
 
 Platform folders link to shared scripts, workflow documents and profiles. Edit the
@@ -40,13 +43,19 @@ API keys remain in the existing local `skills/moa/.env`, with no per-platform co
 
 ```bash
 ./install.sh --dry-run
-./install.sh                         # both platforms
+./install.sh                         # all platforms (codex, claude, gemini, opencode)
 ./install.sh --platform codex        # only Codex
 ./install.sh --platform claude       # only Claude
+./install.sh --platform gemini       # only Gemini / agy (alias: --platform agy)
+./install.sh --platform opencode     # only OpenCode (moa, auto, swarm skills + swarm agent)
 ```
 
 Codex installs into `~/.agents/skills/{moa,auto}`. Claude installs into
-`~/.claude/skills/{moa,auto}`. The installer replaces the old shared Claude→Codex
+`~/.claude/skills/{moa,auto}`. Gemini installs into `~/.gemini/config/skills/{moa,auto}`.
+OpenCode installs into `~/.config/opencode/skills/{moa,auto,swarm}` plus
+`~/.config/opencode/agents/swarm.md` (enable `"default_agent": "swarm"` in
+`~/.config/opencode/opencode.jsonc` to enter `Swarm` directly without `/swarm`, while
+`Tab` switches between `Swarm`, `Build`, and `Plan`). The installer replaces the old shared Claude→Codex
 link with independent links, backs up conflicts under
 `~/.local/share/moa-install-backups/`, and preserves unrelated Gemini hooks.
 A Codex-only migration also detaches a recognized old managed Claude→Codex link,
@@ -64,10 +73,13 @@ is safe. Start a fresh session if the current host has cached skill instructions
 ```bash
 python3 skills/moa/moa_runner.py --platform codex --show-config
 python3 skills/moa/moa_runner.py --platform claude --dry-run
+python3 skills/auto/agy_worker.py models --json
 ```
 
 These commands do not load credentials or send requests. `native_roles` are
-instructions for the host coordinator; `agy_routes` select external coding workers.
+instructions for the host coordinator; `agy_catalog` (8 active families / 19 variants,
+excluding retired `gemini-3.8`) and `agy_routes` let the coordinator automatically
+pick task-fit coding workers and cross-family reviewers unless the user specifies a model.
 These settings do not change the active chat model,
 automatically create an Astra session, or send OpenAI model IDs to Antigravity.
 
